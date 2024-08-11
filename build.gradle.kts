@@ -12,12 +12,14 @@ dependencies {
 
 plugins {
     id("java")
-    id("org.jetbrains.intellij") version "1.8.0"
+    id("org.jetbrains.intellij") version "1.17.4"
+//    id("org.jetbrains.intellij.platform") version "2.0.0"
+//    id("org.jetbrains.intellij.platform.migration") version "2.0.0"
     id("io.freefair.lombok") version "6.3.0"
 }
 
 group = "com"
-version = "1.0.3"
+version = "1.0.4"
 
 repositories {
     mavenLocal()
@@ -25,14 +27,25 @@ repositories {
     mavenCentral()
 }
 
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+}
+
 // Configure Gradle IntelliJ Plugin
 // Read more: https://plugins.jetbrains.com/docs/intellij/tools-gradle-intellij-plugin.html
-intellij {
-    version.set("2021.3.3")
-    type.set("IC") // Target IDE Platform
+//intellij {
+//    //version.set("2021.3.3")
+//    //type.set("IC") // Target IDE Platform
+//
+//    //
+//}
 
+intellij {
+    version.set("2023.3.7")
+    type.set("IC") // Target IDE Platform
     plugins.set(listOf(/* Plugin Dependencies */))
 }
+
 
 // 顶层结构
 tasks.jar.configure {
@@ -43,13 +56,15 @@ tasks.jar.configure {
 tasks {
     // Set the JVM compatibility versions
     withType<JavaCompile> {
-        sourceCompatibility = "11"
-        targetCompatibility = "11"
+        sourceCompatibility = "17"
+        targetCompatibility = "17"
     }
 
     patchPluginXml {
-        sinceBuild.set("213")
-        untilBuild.set("223.*")
+        // 最低版本
+        sinceBuild.set("233")
+        // 最高版本
+        untilBuild.set("242.*")
     }
 
     signPlugin {
