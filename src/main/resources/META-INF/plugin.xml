@@ -37,9 +37,9 @@
     <!-- 版本更新说明 -->
     <change-notes><![CDATA[
         <ul>
-            <li>Fully compatible with IntelliJ IDEA 2024.x</li>
-            <li>Fix action visibility issues in Project View</li>
-            <li>Refactor plugin.xml to align with new Action system</li>
+            <li>Compatible with IntelliJ IDEA 2023.3 ~ 2026.1+</li>
+            <li>Migrate to IntelliJ Platform Gradle Plugin 2.x</li>
+            <li>Remove deprecated NotificationGroup API usage</li>
         </ul>
     ]]></change-notes>
 
@@ -61,7 +61,7 @@
 
         <!-- 右键菜单主分组（⚠️ 关键：ProjectViewPopupMenu） -->
         <group
-                id="SklCodeGenerateGroup"
+                id="Skl.CodeGenerate.Group"
                 text="Skl Code Generate"
                 description="Java code generation tools"
                 popup="true">
@@ -70,88 +70,88 @@
 
         <!-- ===== Actions ===== -->
 
-        <action id="CodeAllAction"
+        <action id="Skl.CodeGenerate.CodeAllAction"
                 class="com.code.action.CodeAllAction"
                 text="Generate All Code"
                 description="Generate all related backend code">
-            <add-to-group group-id="SklCodeGenerateGroup"/>
+            <add-to-group group-id="Skl.CodeGenerate.Group"/>
         </action>
 
-        <action id="QueryAllAction"
+        <action id="Skl.CodeGenerate.QueryAllAction"
                 class="com.code.action.QueryAllAction"
                 text="Generate Query Classes"
                 description="Generate Query and Service Query classes">
-            <add-to-group group-id="SklCodeGenerateGroup"/>
+            <add-to-group group-id="Skl.CodeGenerate.Group"/>
         </action>
 
-        <action id="EntityAction"
+        <action id="Skl.CodeGenerate.EntityAction"
                 class="com.code.action.EntityAction"
                 text="Generate Entity"
                 description="Generate Entity class">
-            <add-to-group group-id="SklCodeGenerateGroup"/>
+            <add-to-group group-id="Skl.CodeGenerate.Group"/>
         </action>
 
-        <action id="EntityQueryAction"
+        <action id="Skl.CodeGenerate.EntityQueryAction"
                 class="com.code.action.EntityQueryAction"
                 text="Generate Entity Query"
                 description="Generate Entity Query class">
-            <add-to-group group-id="SklCodeGenerateGroup"/>
+            <add-to-group group-id="Skl.CodeGenerate.Group"/>
         </action>
 
-        <action id="EntityBOAction"
+        <action id="Skl.CodeGenerate.EntityBOAction"
                 class="com.code.action.EntityBOAction"
                 text="Generate Entity BO"
                 description="Generate Business Object (BO)">
-            <add-to-group group-id="SklCodeGenerateGroup"/>
+            <add-to-group group-id="Skl.CodeGenerate.Group"/>
         </action>
 
-        <action id="EntityVOAction"
+        <action id="Skl.CodeGenerate.EntityVOAction"
                 class="com.code.action.EntityVOAction"
                 text="Generate Entity VO"
                 description="Generate View Object (VO)">
-            <add-to-group group-id="SklCodeGenerateGroup"/>
+            <add-to-group group-id="Skl.CodeGenerate.Group"/>
         </action>
 
-        <action id="EnumsAction"
+        <action id="Skl.CodeGenerate.EnumsAction"
                 class="com.code.action.EnumsAction"
                 text="Generate Enum"
                 description="Generate Enum classes">
-            <add-to-group group-id="SklCodeGenerateGroup"/>
+            <add-to-group group-id="Skl.CodeGenerate.Group"/>
         </action>
 
-        <action id="ControllerAction"
+        <action id="Skl.CodeGenerate.ControllerAction"
                 class="com.code.action.ControllerAction"
                 text="Generate Controller"
                 description="Generate Controller layer">
-            <add-to-group group-id="SklCodeGenerateGroup"/>
+            <add-to-group group-id="Skl.CodeGenerate.Group"/>
         </action>
 
-        <action id="ServiceAction"
+        <action id="Skl.CodeGenerate.ServiceAction"
                 class="com.code.action.ServiceAction"
                 text="Generate Service"
                 description="Generate Service interface and implementation">
-            <add-to-group group-id="SklCodeGenerateGroup"/>
+            <add-to-group group-id="Skl.CodeGenerate.Group"/>
         </action>
 
-        <action id="ServiceQueryAction"
+        <action id="Skl.CodeGenerate.ServiceQueryAction"
                 class="com.code.action.ServiceQueryAction"
                 text="Generate Service Query"
                 description="Generate Service Query layer">
-            <add-to-group group-id="SklCodeGenerateGroup"/>
+            <add-to-group group-id="Skl.CodeGenerate.Group"/>
         </action>
 
-        <action id="ServiceResultsAction"
+        <action id="Skl.CodeGenerate.ServiceResultsAction"
                 class="com.code.action.ServiceResultsAction"
                 text="Generate Service Results"
                 description="Generate Service Result wrapper classes">
-            <add-to-group group-id="SklCodeGenerateGroup"/>
+            <add-to-group group-id="Skl.CodeGenerate.Group"/>
         </action>
 
-        <action id="MapperAction"
+        <action id="Skl.CodeGenerate.MapperAction"
                 class="com.code.action.MapperAction"
                 text="Generate Mapper"
                 description="Generate Mapper interface and XML">
-            <add-to-group group-id="SklCodeGenerateGroup"/>
+            <add-to-group group-id="Skl.CodeGenerate.Group"/>
         </action>
 
     </actions>
