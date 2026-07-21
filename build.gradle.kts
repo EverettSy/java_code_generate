@@ -39,7 +39,8 @@ tasks {
 
     patchPluginXml {
         sinceBuild.set("233")
-        untilBuild.set("241.*")
+        // 不设置 untilBuild 上限，兼容 233 及以后所有版本
+        untilBuild.set(provider { null })
     }
 
     runIde {
