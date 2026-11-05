@@ -14,10 +14,8 @@ import java.util.List;
 /**
  * json转换工具类
  *
- * @author sunkailun
+ * @author syrobin
  * @DateTime 2020/12/27  下午4:42
- * @email 376253703@qq.com
- * @phone 13777579028
  */
 public class JsonUtil {
 

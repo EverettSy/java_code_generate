@@ -1,45 +1,58 @@
 <idea-plugin>
 
     <!-- 插件唯一 ID（发布后不可修改） -->
-    <id>com.skl.java.code.generate</id>
+    <id>com.syrobin.java.code.generate</id>
 
     <!-- 插件名称 -->
-    <name>Skl Java Code Generate</name>
+    <name>Syrobin Java Code Generate</name>
 
     <!-- 插件版本 -->
-    <version>2.0.0</version>
+    <version>2.1.0</version>
 
     <!-- 作者信息 -->
     <vendor
-            email="376253703@qq.com"
-            url="https://github.com/sunkailun1992">
-        孙凯伦
+            url="https://github.com/EverettSy">
+        syrobin
     </vendor>
 
-    <!-- 插件描述（Marketplace 要求 ≥ 40 字） -->
+    <!-- 插件描述（Marketplace 规范：中英双语特性说明） -->
     <description><![CDATA[
         <p>
-            Skl Java Code Generate is an IntelliJ IDEA plugin designed to
-            reduce repetitive Java coding work by generating common
-            backend code structures such as Entity, VO, BO, Query,
-            Mapper, Service, Controller, and Enum classes.
+            <b>Syrobin Java Code Generate</b> is a full-featured, intelligent Java backend code generator plugin for IntelliJ IDEA,
+            designed to eliminate repetitive scaffolding work and accelerate microservice &amp; enterprise application development.
         </p>
         <p>
-            It supports multi-table generation and customizable templates,
-            making it suitable for rapid development in Java backend projects.
+            <b>Syrobin Java Code Generate</b> 是一款面向 IntelliJ IDEA 的全功能、智能化 Java 后端代码生成插件，旨在消除重复的脚手架编码工作，全面提速微服务与企业级应用研发。
         </p>
-        <p>
-            Template path:
-            /src/main/resources/templates/configuration
-        </p>
+
+        <h3>Key Features (English)</h3>
+        <ul>
+            <li><b>11-Layer Full-Stack Generation:</b> One-click or modular generation of <code>Entity</code>, <code>BO</code>, <code>VO</code>, <code>Query</code>, <code>Enum</code>, <code>Mapper</code>, <code>Service</code>, <code>ServiceImpl</code>, <code>ServiceQuery</code>, <code>ServiceResults</code>, and <code>Controller</code>.</li>
+            <li><b>Multi-Dialect &amp; Offline DDL Engine:</b> Supports live metadata extraction from <b>MySQL, PostgreSQL, Oracle, and Dameng (DM8)</b>, one-click datasource auto-discovery from Spring <code>application.yml</code> / <code>properties</code>, and 100% <b>offline <code>CREATE TABLE</code> DDL SQL parsing</b>.</li>
+            <li><b>Smart Incremental Merge &amp; Diff Preview:</b> Preserves hand-written business methods and custom imports when table schemas evolve, with side-by-side IntelliJ <code>DiffManager</code> preview before writing.</li>
+            <li><b>Smart Annotation &amp; Enum Inference:</b> Automatically generates <b>Swagger 2 / SpringDoc OpenAPI 3</b> documentation annotations, <b>Bean Validation</b> constraints (<code>@NotBlank</code>, <code>@NotNull</code>, <code>@Size</code>, <code>@Email</code>, <code>@Pattern</code>, <code>@PositiveOrZero</code>) for both Spring Boot 2 (<code>javax.*</code>) and Spring Boot 3 (<code>jakarta.*</code>), and type-safe Enum classes from full/half-width column comments.</li>
+            <li><b>Built-in FreeMarker Template Center:</b> Customize, preview, reset, or export all 11 FreeMarker (<code>.ftl</code>) templates directly inside <code>Settings / Preferences -&gt; Tools -&gt; Syrobin Code Generate</code> with zero external middleware dependencies.</li>
+        </ul>
+
+        <h3>核心特性（中文说明）</h3>
+        <ul>
+            <li><b>11 层后端代码一键/按需生成：</b>支持多表批量生成或单层独立生成 <code>Entity</code>、<code>BO</code>、<code>VO</code>、<code>Query</code>、<code>Enum</code>、<code>Mapper</code>、<code>Service</code>、<code>ServiceImpl</code>、<code>ServiceQuery</code>、<code>ServiceResults</code> 与 <code>Controller</code>。</li>
+            <li><b>多数据库方言与离线 DDL 解析引擎：</b>原生适配 <b>MySQL、PostgreSQL、Oracle、达梦（DM8）</b>四大数据库元数据提取，支持一键扫描工程 <code>application.yml</code> / <code>properties</code> 自动识别数据源，并提供<b>离线 <code>CREATE TABLE</code> SQL 解析</b>与 <code>.sql</code> 文件右键直接生成能力。</li>
+            <li><b>智能增量代码合并与 Diff 预览：</b>表结构新增字段时，仅增量追加新增成员变量与缺失 <code>import</code>，100% 保留开发者手写的业务方法与自定义逻辑，并支持调起 IDEA 原生 <code>DiffManager</code> 左右分栏对比确认。</li>
+            <li><b>文档注解、校验注解与枚举智能推断：</b>支持一键切换 <b>Swagger 2 / SpringDoc OpenAPI 3</b> 注解风格，适配 <b>Spring Boot 2 (<code>javax.*</code>) / Spring Boot 3 (<code>jakarta.*</code>)</b> 自动推断 <code>@NotBlank</code>、<code>@NotNull</code>、<code>@Size</code>、<code>@Email</code>、<code>@Pattern</code>、<code>@PositiveOrZero</code> 校验注解，并兼容中英文全/半角括号注释自动生成枚举类。</li>
+            <li><b>内置 FreeMarker 模板配置中心：</b>内置 11 套开箱即用的默认模板与本地工作区持久化能力（零 Redis 依赖），支持在 <code>Settings / Preferences -&gt; Tools -&gt; Syrobin Code Generate</code> 中在线编辑、恢复默认或导出模板至工程 <code>/src/main/resources/templates/</code> 目录。</li>
+        </ul>
     ]]></description>
 
     <!-- 版本更新说明 -->
     <change-notes><![CDATA[
+        <h3>v2.1.0 - Full Architecture &amp; Intelligence Upgrade (全架构与智能化升级)</h3>
         <ul>
-            <li>Compatible with IntelliJ IDEA 2023.3 ~ 2026.1+</li>
-            <li>Migrate to IntelliJ Platform Gradle Plugin 2.x</li>
-            <li>Remove deprecated NotificationGroup API usage</li>
+            <li><b>Brand &amp; Visual Upgrade (品牌与视觉升级):</b> Updated plugin ID (<code>com.syrobin.java.code.generate</code>), author metadata (<b>syrobin</b>), and custom vector icons for Light &amp; Dark themes.</li>
+            <li><b>P0 Baseline Governance (基线治理):</b> Non-blocking modeless wizard compatible with IntelliJ IDEA 2023.3 ~ 2026.1+ and JDK 21~25+, accurate <code>bigint -&gt; Long</code> mapping, UTF-8 file writing, and automatic VFS project tree refresh.</li>
+            <li><b>P1 Unified Wizard &amp; Zero External Dependencies (一体化向导与去外部依赖):</b> 4-tab <code>DialogWrapper</code> wizard, workspace-scoped <code>PersistentStateComponent</code> storage, 11 built-in FreeMarker fallback templates, and full/half-width enum comment parser.</li>
+            <li><b>P2 IDE Ecosystem Integration (IDE 生态深度集成):</b> Incremental Java field/import merger, native <code>DiffManager</code> side-by-side preview, Settings FreeMarker template center, multi-dialect support (MySQL / PostgreSQL / Oracle / DM8), and Spring <code>application.yml</code> datasource auto-scanner.</li>
+            <li><b>P3 Offline DDL &amp; Smart Validation (离线 DDL 与智能校验):</b> Offline <code>CREATE TABLE</code> SQL parser, right-click <code>.sql</code> file generator, and automatic Bean Validation annotation inference.</li>
         </ul>
     ]]></change-notes>
 
@@ -49,109 +62,124 @@
     <!-- 扩展点 -->
     <extensions defaultExtensionNs="com.intellij">
 
-        <!-- 通知组（新 API） -->
+        <!-- 通知组 -->
         <notificationGroup
-                id="SklCodeGenerateNotification"
+                id="SyrobinCodeGenerateNotification"
                 displayType="BALLOON"
                 isLogByDefault="true"/>
+
+        <!-- Settings -> Tools -> Syrobin Code Generate 模板与全局策略中心 -->
+        <projectConfigurable
+                parentId="tools"
+                instance="com.code.config.SklCodeGenConfigurable"
+                id="com.syrobin.java.code.generate.configurable"
+                displayName="Syrobin Code Generate"/>
     </extensions>
 
     <!-- Action 定义 -->
     <actions>
 
-        <!-- 右键菜单主分组（⚠️ 关键：ProjectViewPopupMenu） -->
+        <!-- 右键菜单主分组（带专属 16x16 矢量图标） -->
         <group
-                id="Skl.CodeGenerate.Group"
-                text="Skl Code Generate"
-                description="Java code generation tools"
+                id="Syrobin.CodeGenerate.Group"
+                text="Syrobin Code Generate"
+                description="Intelligent Java backend code generation tools by syrobin"
+                icon="/icons/pluginActionIcon.svg"
                 popup="true">
             <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
         </group>
 
         <!-- ===== Actions ===== -->
 
-        <action id="Skl.CodeGenerate.CodeAllAction"
+        <action id="Syrobin.CodeGenerate.CodeAllAction"
                 class="com.code.action.CodeAllAction"
                 text="Generate All Code"
-                description="Generate all related backend code">
-            <add-to-group group-id="Skl.CodeGenerate.Group"/>
+                description="Generate all 11 related backend code layers">
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
         </action>
 
-        <action id="Skl.CodeGenerate.QueryAllAction"
+        <action id="Syrobin.CodeGenerate.DdlFileGenerateAction"
+                class="com.code.action.DdlFileGenerateAction"
+                text="Generate Code from DDL SQL (Offline)"
+                description="Parse CREATE TABLE SQL file or script offline to generate backend code">
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
+        </action>
+
+        <action id="Syrobin.CodeGenerate.QueryAllAction"
                 class="com.code.action.QueryAllAction"
                 text="Generate Query Classes"
-                description="Generate Query and Service Query classes">
-            <add-to-group group-id="Skl.CodeGenerate.Group"/>
+                description="Generate EntityQuery and ServiceQuery classes">
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
         </action>
 
-        <action id="Skl.CodeGenerate.EntityAction"
+        <action id="Syrobin.CodeGenerate.EntityAction"
                 class="com.code.action.EntityAction"
                 text="Generate Entity"
                 description="Generate Entity class">
-            <add-to-group group-id="Skl.CodeGenerate.Group"/>
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
         </action>
 
-        <action id="Skl.CodeGenerate.EntityQueryAction"
+        <action id="Syrobin.CodeGenerate.EntityQueryAction"
                 class="com.code.action.EntityQueryAction"
                 text="Generate Entity Query"
                 description="Generate Entity Query class">
-            <add-to-group group-id="Skl.CodeGenerate.Group"/>
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
         </action>
 
-        <action id="Skl.CodeGenerate.EntityBOAction"
+        <action id="Syrobin.CodeGenerate.EntityBOAction"
                 class="com.code.action.EntityBOAction"
                 text="Generate Entity BO"
-                description="Generate Business Object (BO)">
-            <add-to-group group-id="Skl.CodeGenerate.Group"/>
+                description="Generate Business Object (BO) with smart validation annotations">
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
         </action>
 
-        <action id="Skl.CodeGenerate.EntityVOAction"
+        <action id="Syrobin.CodeGenerate.EntityVOAction"
                 class="com.code.action.EntityVOAction"
                 text="Generate Entity VO"
                 description="Generate View Object (VO)">
-            <add-to-group group-id="Skl.CodeGenerate.Group"/>
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
         </action>
 
-        <action id="Skl.CodeGenerate.EnumsAction"
+        <action id="Syrobin.CodeGenerate.EnumsAction"
                 class="com.code.action.EnumsAction"
                 text="Generate Enum"
-                description="Generate Enum classes">
-            <add-to-group group-id="Skl.CodeGenerate.Group"/>
+                description="Generate Enum classes from column comments">
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
         </action>
 
-        <action id="Skl.CodeGenerate.ControllerAction"
+        <action id="Syrobin.CodeGenerate.ControllerAction"
                 class="com.code.action.ControllerAction"
                 text="Generate Controller"
-                description="Generate Controller layer">
-            <add-to-group group-id="Skl.CodeGenerate.Group"/>
+                description="Generate REST Controller layer">
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
         </action>
 
-        <action id="Skl.CodeGenerate.ServiceAction"
+        <action id="Syrobin.CodeGenerate.ServiceAction"
                 class="com.code.action.ServiceAction"
                 text="Generate Service"
                 description="Generate Service interface and implementation">
-            <add-to-group group-id="Skl.CodeGenerate.Group"/>
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
         </action>
 
-        <action id="Skl.CodeGenerate.ServiceQueryAction"
+        <action id="Syrobin.CodeGenerate.ServiceQueryAction"
                 class="com.code.action.ServiceQueryAction"
                 text="Generate Service Query"
-                description="Generate Service Query layer">
-            <add-to-group group-id="Skl.CodeGenerate.Group"/>
+                description="Generate Service Query enhancement layer">
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
         </action>
 
-        <action id="Skl.CodeGenerate.ServiceResultsAction"
+        <action id="Syrobin.CodeGenerate.ServiceResultsAction"
                 class="com.code.action.ServiceResultsAction"
                 text="Generate Service Results"
-                description="Generate Service Result wrapper classes">
-            <add-to-group group-id="Skl.CodeGenerate.Group"/>
+                description="Generate Service Result converter classes">
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
         </action>
 
-        <action id="Skl.CodeGenerate.MapperAction"
+        <action id="Syrobin.CodeGenerate.MapperAction"
                 class="com.code.action.MapperAction"
                 text="Generate Mapper"
-                description="Generate Mapper interface and XML">
-            <add-to-group group-id="Skl.CodeGenerate.Group"/>
+                description="Generate MyBatis-Plus Mapper interface">
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
         </action>
 
     </actions>

@@ -9,11 +9,11 @@ import org.jetbrains.annotations.Nullable;
 /**
  * @ClassName MyNotifier
  * @Description 消息通知工具类（兼容 IDEA 2023+ ~ 2026+）
- * @Author 孙凯伦
+ * @Author syrobin
  */
 public class MyNotifier {
 
-    private static final String GROUP_ID = "SklCodeGenerateNotification";
+    private static final String GROUP_ID = "SyrobinCodeGenerateNotification";
 
     /**
      * 错误通知

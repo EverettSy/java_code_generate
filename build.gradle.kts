@@ -1,3 +1,5 @@
+import org.jetbrains.intellij.platform.gradle.TestFrameworkType
+
 // IntelliJ 平台插件构建脚本：Java + Gradle Kotlin DSL
 
 plugins {
@@ -6,8 +8,8 @@ plugins {
     id("org.jetbrains.intellij.platform") version "2.13.1"
 }
 
-group = "com"
-version = "2.0.0"
+group = "com.syrobin"
+version = "2.1.0"
 
 repositories {
     mavenCentral()
@@ -18,9 +20,10 @@ repositories {
 }
 
 dependencies {
-    // 开发/运行插件所基于的 IDE 版本
+    // 开发/运行插件所基于的 IDE 版本与平台测试框架
     intellijPlatform {
         intellijIdea("2026.1")
+        testFramework(TestFrameworkType.Platform)
     }
 
     // 模板与工具库
@@ -31,9 +34,8 @@ dependencies {
     implementation("redis.clients:jedis:3.1.0")
     implementation("mysql:mysql-connector-java:8.0.19")
 
-    // 仅编译期：Lombok 由注解处理器生成样板代码
-    compileOnly("org.projectlombok:lombok:1.18.36")
-    annotationProcessor("org.projectlombok:lombok:1.18.36")
+    // 单元测试依赖（与 IntelliJ Platform TestFramework 原生兼容）
+    testImplementation("junit:junit:4.13.2")
 }
 
 intellijPlatform {
@@ -63,8 +65,10 @@ intellijPlatform {
 
 tasks {
     withType<JavaCompile> {
+        // 使用 release 21 确保在 JDK 21 ~ JDK 25+ 编译时均生成兼容 IDEA JBR 21 的字节码
         sourceCompatibility = "21"
         targetCompatibility = "21"
+        options.release.set(21)
         options.encoding = "UTF-8"
     }
 

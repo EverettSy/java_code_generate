@@ -9,7 +9,7 @@ import java.io.StringWriter;
 /**
  * FreeMarkers工具类
  * 
- * @author ThinkGem
+ * @author syrobin
  * @version 2013-01-15
  */
 public class FreeMarkers {

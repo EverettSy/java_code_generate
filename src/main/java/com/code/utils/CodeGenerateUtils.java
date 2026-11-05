@@ -1,11 +1,15 @@
 package com.code.utils;
 
+import com.code.config.CodeGenSettingsState;
 import com.code.utils.entity.Table;
+import com.intellij.openapi.project.Project;
 import org.apache.commons.lang3.StringUtils;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileWriter;
+import java.io.FileOutputStream;
+import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.sql.*;
 import java.text.SimpleDateFormat;
@@ -13,28 +17,27 @@ import java.util.*;
 
 /**
  * Created with IntelliJ IDEA.
- * User:    孙凯伦
- * email:   skl@erongdu.com
+ * User:    syrobin
  * Date:    2016/2/1
  * Time:    17:55
- * details: 代码生成工具类
+ * details: 代码生成工具类（P2：支持 MySQL/PostgreSQL/Oracle/DM8 多数据库方言与 Spring 配置识别）
  */
 public class CodeGenerateUtils {
+
     /**
      * @param rs ResultSet转list
-     * @return
+     * @return List<Map<String, Object>>
      * @throws SQLException
      */
-    public static List resultSetToList(ResultSet rs) throws SQLException {
+    public static List<Map<String, Object>> resultSetToList(ResultSet rs) throws SQLException {
         if (rs == null) {
-            return Collections.EMPTY_LIST;
+            return Collections.emptyList();
         }
-        ResultSetMetaData md = rs.getMetaData(); //得到结果集(rs)的结构信息，比如字段数、字段名等
-        int columnCount = md.getColumnCount(); //返回此 ResultSet 对象中的列数
-        List list = new ArrayList();
-        Map rowData = new HashMap();
+        ResultSetMetaData md = rs.getMetaData();
+        int columnCount = md.getColumnCount();
+        List<Map<String, Object>> list = new ArrayList<>();
         while (rs.next()) {
-            rowData = new HashMap(columnCount);
+            Map<String, Object> rowData = new HashMap<>(columnCount);
             for (int i = 1; i <= columnCount; i++) {
                 rowData.put(md.getColumnName(i), rs.getObject(i));
             }
@@ -44,137 +47,145 @@ public class CodeGenerateUtils {
     }
 
     /**
-     * 获取表信息
-     *
-     * @param table_name
-     * @return
+     * 获取数据库中所有表名列表（支持多方言）
      */
-    public static List<Table> getList(String path, String table_name, String database) {
-        //赋值的list
-        List<Table> list = new ArrayList<Table>();
-        //数据库链接
-        Connection conn = getDblink(path);
-        Statement stmt = null;
-        try {
-            stmt = conn.createStatement();
-            //查询出表,列名,属性,注释
-            String sql = "SELECT COLUMN_NAME, DATA_TYPE, COLUMN_COMMENT FROM INFORMATION_SCHEMA.`COLUMNS` WHERE table_name = '" + table_name + "'  AND table_schema = '" + database + "'";
-            //执行sql
-            ResultSet rs = stmt.executeQuery(sql);
-            List<Map<String, Object>> l = resultSetToList(rs);
-            for (Map<String, Object> map : l) {
-                //赋值
-                Table table = new Table();
-                //数据库无转换列名
-                table.setTypeName(new String(String.valueOf(map.get("COLUMN_NAME")).getBytes(StandardCharsets.UTF_8)));
-                //将列名全部改为小写,凡是加_首字母大写
-                table.setColumnName(new String(StringUtils.uncapitalize(toUpper(String.valueOf(map.get("COLUMN_NAME")))).getBytes(StandardCharsets.UTF_8)));
-                //将类名改为首字母大写
-                table.setColumnNameUpper(new String(StringUtils.capitalize(table.getColumnName()).getBytes(StandardCharsets.UTF_8)));
-                //设置sql的类型
-                table.setDataType(new String(sqlType2JavaType(String.valueOf(map.get("DATA_TYPE"))).getBytes(StandardCharsets.UTF_8)));
-                //设置注释
-                table.setColumnComment(new String(String.valueOf(map.get("COLUMN_COMMENT")).getBytes(StandardCharsets.UTF_8)));
-                list.add(table);
-            }
-            rs.close();
-
-        } catch (SQLException e) {
-            e.printStackTrace();
-        } finally {
-            try {
-                stmt.close();
-                conn.close();
-            } catch (SQLException e) {
-                e.printStackTrace();
-            }
-
-        }
-
-        return list;
+    public static List<String> getAllTableNames(Connection conn, String database) throws SQLException {
+        DatabaseDialect dialect = detectDialect(conn);
+        return new ArrayList<>(dialect.queryTablesWithComments(conn, database).keySet());
     }
 
+    /**
+     * 获取数据库中所有表名及表注释（支持多方言，格式：table_name (表注释)）
+     */
+    public static List<String> getAllTablesWithComments(Connection conn, String database) throws SQLException {
+        DatabaseDialect dialect = detectDialect(conn);
+        Map<String, String> map = dialect.queryTablesWithComments(conn, database);
+        List<String> tables = new ArrayList<>();
+        for (Map.Entry<String, String> entry : map.entrySet()) {
+            if (StringUtils.isNotBlank(entry.getValue())) {
+                tables.add(entry.getKey() + " (" + entry.getValue().trim() + ")");
+            } else {
+                tables.add(entry.getKey());
+            }
+        }
+        return tables;
+    }
 
     /**
-     * 数据库链接
-     * String MysqlUser = "root";
-     * String password = "mysql";
-     * String url = "jdbc:mysql://127.0.0.1:3306/eabs?useUnicode=true&characterEncoding=utf8";
-     *
-     * @return
+     * 获取表字段元数据信息
      */
+    public static List<Table> getList(String path, String table_name, String database) throws Exception {
+        try (Connection conn = getDblink(null, path)) {
+            return getList(conn, table_name, database);
+        }
+    }
 
-    public static Connection getDblink(String path) {
-        Connection conn = null;
-        //数据库连接
+    /**
+     * 复用已有数据库连接获取表字段元数据信息（自动适配多数据库方言）
+     */
+    public static List<Table> getList(Connection conn, String table_name, String database) throws SQLException {
+        DatabaseDialect dialect = detectDialect(conn);
+        return dialect.queryColumns(conn, database, table_name);
+    }
+
+    public static DatabaseDialect detectDialect(Connection conn) {
         try {
-            //加载mysq驱动
-            Class.forName("com.mysql.jdbc.Driver");
+            String url = conn.getMetaData().getURL();
+            return DatabaseDialect.fromJdbcUrl(url);
+        } catch ( Exception e) {
+            return DatabaseDialect.MYSQL;
+        }
+    }
+
+    /**
+     * 获取数据库连接（兼容旧签名）
+     */
+    public static Connection getDblink(String path) throws Exception {
+        return getDblink(null, path);
+    }
+
+    /**
+     * 获取数据库连接（优先读取 IDE 本地持久化配置，其次读取 mysql.properties 或 Spring application.yml）
+     */
+    public static Connection getDblink(@Nullable Project project, String path) throws Exception {
+        if (project != null) {
+            CodeGenSettingsState settings = CodeGenSettingsState.getInstance(project);
+            settings.importFromProjectProperties(path, false);
+            CodeGenSettingsState.ConfigState st = settings.getState();
+            if (st != null && StringUtils.isNotBlank(st.jdbcUrl) && !st.jdbcUrl.contains("your_db")) {
+                DatabaseDialect.fromJdbcUrl(st.jdbcUrl).loadDriver();
+                return DriverManager.getConnection(st.jdbcUrl, st.username, st.retrieveCredential());
+            }
+        }
+        File propFile = new File(path + "src/main/resources/templates/config/mysql.properties");
+        if (propFile.exists()) {
             PropertiesUtil propertiesUtil = PropertiesUtil.getMySqlProperties(path);
-            conn = DriverManager.getConnection(propertiesUtil.getProperty("url"), propertiesUtil.getProperty("username"), propertiesUtil.getProperty("password"));
-        } catch (Exception e) {
-            e.printStackTrace();
+            String url = propertiesUtil.getProperty("url");
+            DatabaseDialect.fromJdbcUrl(url).loadDriver();
+            return DriverManager.getConnection(
+                    url,
+                    propertiesUtil.getProperty("username"),
+                    propertiesUtil.getProperty("password")
+            );
         }
-        return conn;
+        if (project != null && CodeGenSettingsState.getInstance(project).getState() != null) {
+            CodeGenSettingsState.ConfigState st = CodeGenSettingsState.getInstance(project).getState();
+            DatabaseDialect.fromJdbcUrl(st.jdbcUrl).loadDriver();
+            return DriverManager.getConnection(st.jdbcUrl, st.username, st.retrieveCredential());
+        }
+        throw new IllegalStateException("未配置数据库连接，请在生成弹窗「3. 数据源设置」中填写连接信息。");
     }
 
     /**
-     * “_”+小写 转成大写字母
-     *
-     * @param str
-     * @return
+     * “_”+小写 转成驼峰首字母大写
      */
     public static String toUpper(String str) {
-        String name = null;
-        String[] split = StringUtils.split(str, "_");
-
-        for (String string : split) {
-            if (name == null) {
-                name = StringUtils.capitalize(string);
-            } else {
-                name += StringUtils.capitalize(string);
-            }
+        if (StringUtils.isBlank(str)) {
+            return "";
         }
-        return name;
+        String[] split = StringUtils.split(str, "_");
+        StringBuilder name = new StringBuilder();
+        for (String part : split) {
+            name.append(StringUtils.capitalize(part));
+        }
+        return name.toString();
     }
 
     /**
-     * 功能：获得列的数据类型
-     *
-     * @param sqlType
-     * @return
+     * 功能：获得列的数据类型映射（支持 MySQL / PostgreSQL / Oracle / DM8 常见类型）
      */
     public static String sqlType2JavaType(String sqlType) {
-
-        if (sqlType.equalsIgnoreCase("bit")) {
-            return "Boolean";
-        } else if (sqlType.equalsIgnoreCase("tinyint")) {
-            return "Integer";
-        } else if (sqlType.equalsIgnoreCase("smallint")) {
-            return "Short";
-        } else if (sqlType.equalsIgnoreCase("int")) {
-            return "Integer";
-        } else if (sqlType.equalsIgnoreCase("Integer")) {
-            return "Integer";
-        } else if (sqlType.equalsIgnoreCase("bigint")) {
-            return "Integer";
-        } else if (sqlType.equalsIgnoreCase("float")) {
-            return "Float";
-        } else if (sqlType.equalsIgnoreCase("double")) {
-            return "Double";
-        } else if (sqlType.equalsIgnoreCase("decimal") || sqlType.equalsIgnoreCase("numeric")
-                || sqlType.equalsIgnoreCase("real") || sqlType.equalsIgnoreCase("money")
-                || sqlType.equalsIgnoreCase("smallmoney") || sqlType.equalsIgnoreCase("double")) {
-            return "BigDecimal";
-        } else if (sqlType.equalsIgnoreCase("varchar") || sqlType.equalsIgnoreCase("char")
-                || sqlType.equalsIgnoreCase("nvarchar") || sqlType.equalsIgnoreCase("nchar")
-                || sqlType.equalsIgnoreCase("text") || sqlType.equalsIgnoreCase("variant")) {
+        if (StringUtils.isBlank(sqlType)) {
             return "String";
-        } else if (sqlType.equalsIgnoreCase("datetime") || sqlType.equalsIgnoreCase("date")) {
+        }
+        String t = sqlType.trim().toLowerCase(Locale.ROOT);
+        if (t.equals("bit") || t.equals("bool") || t.equals("boolean")) {
+            return "Boolean";
+        } else if (t.equals("tinyint") || t.equals("int2") || t.equals("int4")
+                || t.equals("int") || t.equals("integer") || t.equals("mediumint") || t.equals("serial")) {
+            return "Integer";
+        } else if (t.equals("smallint")) {
+            return "Short";
+        } else if (t.equals("bigint") || t.equals("int8") || t.equals("bigserial") || t.equals("number")) {
+            return "Long";
+        } else if (t.equals("float") || t.equals("float4")) {
+            return "Float";
+        } else if (t.equals("double") || t.equals("float8") || t.equals("binary_double")) {
+            return "Double";
+        } else if (t.equals("decimal") || t.equals("numeric")
+                || t.equals("real") || t.equals("money")
+                || t.equals("smallmoney")) {
+            return "BigDecimal";
+        } else if (t.contains("varchar") || t.contains("char")
+                || t.contains("text") || t.contains("clob")
+                || t.equals("json") || t.equals("jsonb") || t.equals("variant")) {
+            return "String";
+        } else if (t.contains("datetime") || t.equals("date")
+                || t.contains("timestamp")) {
             return "LocalDateTime";
-        } else if (sqlType.equalsIgnoreCase("image")) {
-            return "Blod";
-        } else if (sqlType.equalsIgnoreCase("blob")) {
+        } else if (t.equals("image")) {
+            return "Blob";
+        } else if (t.contains("blob") || t.contains("binary") || t.equals("bytea") || t.equals("raw")) {
             return "byte[]";
         }
 
@@ -182,66 +193,46 @@ public class CodeGenerateUtils {
     }
 
     /**
-     * 将内容写入文件
-     *
-     * @param content
-     * @param filePath
+     * 将内容以 UTF-8 编码写入文件
      */
-    public static void writeFile(String content, String filePath) {
-        try {
-            createFile(filePath);
-            FileWriter fileWriter = new FileWriter(filePath);
-            BufferedWriter bufferedWriter = new BufferedWriter(fileWriter);
+    public static void writeFile(String content, String filePath) throws Exception {
+        createFile(filePath);
+        try (BufferedWriter bufferedWriter = new BufferedWriter(
+                new OutputStreamWriter(new FileOutputStream(filePath), StandardCharsets.UTF_8))) {
             bufferedWriter.write(content);
-            bufferedWriter.close();
-            fileWriter.close();
-        } catch (Exception e) {
-            e.printStackTrace();
         }
     }
 
     /**
-     * 创建单个文件
-     *
-     * @param descFileName 文件名，包含路径
-     * @return 如果创建成功，则返回true，否则返回false
+     * 创建单个文件及父目录
      */
     public static boolean createFile(String descFileName) {
         File file = new File(descFileName);
         if (file.exists()) {
-            System.err.println("文件 " + descFileName + " 已存在，覆盖生成");
             return false;
         }
         if (descFileName.endsWith(File.separator)) {
-            System.err.println(descFileName + " 为目录，不能创建目录!");
             return false;
         }
-        if (!file.getParentFile().exists()) {
-            // 如果文件所在的目录不存在，则创建目录
-            if (!file.getParentFile().mkdirs()) {
-                System.err.println("创建文件所在的目录失败!");
+        File parentFile = file.getParentFile();
+        if (parentFile != null && !parentFile.exists()) {
+            if (!parentFile.mkdirs()) {
                 return false;
             }
         }
-
-        // 创建文件
         try {
-            if (file.createNewFile()) {
-                System.err.println(descFileName + " 文件创建成功!");
-                return true;
-            } else {
-                System.err.println(descFileName + " 文件创建失败!");
-                return false;
-            }
+            return file.createNewFile();
         } catch (Exception e) {
             e.printStackTrace();
-            System.err.println(descFileName + " 文件创建失败!");
             return false;
         }
     }
 
+    /**
+     * 获取当前时间（24 小时制）
+     */
     public static String getDate() {
-        SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
+        SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
         return format.format(new java.util.Date());
     }
 }
