@@ -74,14 +74,18 @@ public class CodeGenerate {
 
         // 1. 优先检查是否存在离线 DDL 解析出的表元数据
         Object ddlMapObj = parameterMap.get("parsedDdlTables");
-        if (ddlMapObj instanceof Map<?, ?>) {
+        if (parameterMap.containsKey("parsedDdlTables")) {
+            if (!(ddlMapObj instanceof Map<?, ?>)) {
+                throw new IllegalArgumentException("离线 DDL 元数据无效，请重新解析");
+            }
             Map<String, DdlSqlParser.ParsedTable> ddlMap = (Map<String, DdlSqlParser.ParsedTable>) ddlMapObj;
             DdlSqlParser.ParsedTable parsed = findParsedTableIgnoreCase(ddlMap, table);
-            if (parsed != null) {
-                table = parsed.getTableName();
-                tableComment = Objects.toString(parsed.getTableComment(), "");
-                list = parsed.getColumns();
+            if (parsed == null) {
+                throw new IllegalArgumentException("离线 DDL 未包含表：" + table);
             }
+            table = parsed.getTableName();
+            tableComment = Objects.toString(parsed.getTableComment(), "");
+            list = parsed.getColumns();
         }
 
         // 2. 若未使用离线 DDL，则通过数据库连接拉取表注释与字段元数据
@@ -122,8 +126,8 @@ public class CodeGenerate {
         model.put("list", list);
         model.put("braceL", "{");
         model.put("braceR", "}");
-        model.put("serviceQueryList", parameterMap.getOrDefault("serviceQueryList", Lists.newArrayList()));
-        model.put("beanQuery", parameterMap.getOrDefault("beanQuery", Lists.newArrayList()));
+        model.put("serviceQueryList", queryRulesForTable(parameterMap, "serviceQueryList", table));
+        model.put("beanQuery", queryRulesForTable(parameterMap, "beanQuery", table));
 
         String basePackageDir = address.replace(".", "/");
 
@@ -207,6 +211,14 @@ public class CodeGenerate {
             renderAndWrite(project, cfg, "skl_controller.java.ftl", model,
                     basePackageDir + "/controller/" + className + "Controller.java", writeStrategy);
         }
+    }
+
+    private static Object queryRulesForTable(Map<String, Object> parameterMap, String key, String table) {
+        Object perTableRules = parameterMap.get(key + "ByTable");
+        if (perTableRules instanceof Map<?, ?> rules) {
+            return Objects.requireNonNullElse(rules.get(table), Lists.newArrayList());
+        }
+        return parameterMap.getOrDefault(key, Lists.newArrayList());
     }
 
     private static DdlSqlParser.ParsedTable findParsedTableIgnoreCase(Map<String, DdlSqlParser.ParsedTable> ddlMap, String table) {

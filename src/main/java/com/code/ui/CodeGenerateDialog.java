@@ -183,15 +183,30 @@ public class CodeGenerateDialog extends DialogWrapper {
     private final JLabel footerOutputPathLabel = new JLabel();
 
     // 左侧：选择数据库表
-    private final JLabel leftTablePanelTitleLabel = new JLabel("选择数据库表（勾选参与生成，点击行预览）");
+    private final JLabel leftTablePanelTitleLabel = new JLabel("选择生成表（勾选参与生成，点击行预览）");
+    private final GlassButton loadTablesBtn = new GlassButton("加载表清单");
     private final JBTextField tableSearchField = new JBTextField();
     private final Map<String, TableItem> masterTableMap = new LinkedHashMap<>();
     private final DefaultListModel<TableItem> tableListModel = new DefaultListModel<>();
-    private final JBList<TableItem> tableJList = new JBList<>(tableListModel);
+    private final JBList<TableItem> tableJList = new JBList<>(tableListModel) {
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
+
+        @Override
+        public String getToolTipText(MouseEvent event) {
+            int index = locationToIndex(event.getPoint());
+            Rectangle bounds = index >= 0 ? getCellBounds(index, index) : null;
+            return bounds != null && bounds.contains(event.getPoint())
+                    ? getModel().getElementAt(index).getDisplayLabel() : null;
+        }
+    };
     private String activePreviewTableName = "";
 
     // 右侧：生成文件预览
     private final JLabel rightPreviewTitleLabel = new JLabel("生成文件预览");
+    private final JLabel rightPreviewDetailsLabel = SolidGlassTheme.createHelperLabel("请选择预览表");
     private final JBTextField outputDirReadOnlyField = new JBTextField();
     private DefaultTableModel filePreviewTableModel;
     private JBTable filePreviewTable;
@@ -203,6 +218,9 @@ public class CodeGenerateDialog extends DialogWrapper {
     // 页签二：Query 页当前作用表标签与表格模型
     private final JLabel queryPageTargetTableLabel = new JLabel("规则作用于：未选择表");
     private GlassButton reloadQueryCacheBtn;
+    private String loadedQueryTableName = "";
+    private final Map<String, List<BeanQuery>> beanQueryDrafts = new HashMap<>();
+    private final Map<String, List<ServiceQuery>> serviceQueryDrafts = new HashMap<>();
     private DefaultTableModel beanQueryTableModel;
     private JBTable beanQueryTable;
     private DefaultTableModel serviceQueryTableModel;
@@ -212,7 +230,9 @@ public class CodeGenerateDialog extends DialogWrapper {
     private final SqlSyntaxHighlightPane ddlSqlPane = new SqlSyntaxHighlightPane();
     private final StatusGlyph ddlSingleLineSummaryBadge = new StatusGlyph("待解析 DDL（粘贴 CREATE TABLE 语句后点击「解析 DDL」）", GlyphState.IDLE);
     private final Map<String, DdlSqlParser.ParsedTable> parsedDdlTables = new LinkedHashMap<>();
+    private String lastParsedDdlScript;
     private boolean dbConnectionVerified = false;
+    private int databaseConfigVersion;
     private int lastVerifiedDbTableCount = 0;
     private Runnable onConfirmCallback;
 
@@ -310,6 +330,7 @@ public class CodeGenerateDialog extends DialogWrapper {
 
         GlassButton switchSourceBtn = new GlassButton("切换来源");
         switchSourceBtn.addActionListener(e -> {
+            databaseConfigVersion++;
             if (currentSourceMode == DataSourceMode.DATABASE) {
                 currentSourceMode = DataSourceMode.OFFLINE_DDL;
                 if (mainTabbedPane != null) {
@@ -576,11 +597,10 @@ public class CodeGenerateDialog extends DialogWrapper {
                 filterTableList(tableSearchField.getText());
             }
         });
-        GlassButton loadDbBtn = new GlassButton("加载数据库表");
-        loadDbBtn.addActionListener(e -> fetchDatabaseTablesAsync());
+        loadTablesBtn.addActionListener(e -> fetchDatabaseTablesAsync());
 
         filterToolbar.add(tableSearchField, BorderLayout.CENTER);
-        filterToolbar.add(loadDbBtn, BorderLayout.EAST);
+        filterToolbar.add(loadTablesBtn, BorderLayout.EAST);
 
         JPanel northBox = new JPanel(new BorderLayout(0, 5));
         northBox.setOpaque(false);
@@ -591,7 +611,8 @@ public class CodeGenerateDialog extends DialogWrapper {
         tableJList.setFixedCellHeight(JBUI.scale(26));
         tableJList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         tableJList.setCellRenderer(new TableItemCellRenderer());
-        tableJList.getEmptyText().setText("尚未加载表清单，请点击上方「加载数据库表」或在「离线 DDL 解析」页解析 SQL");
+        tableJList.getEmptyText().setText("尚无生成表，请加载数据库表或解析离线 DDL");
+        ToolTipManager.sharedInstance().registerComponent(tableJList);
 
         tableJList.addMouseListener(new MouseAdapter() {
             @Override
@@ -609,8 +630,6 @@ public class CodeGenerateDialog extends DialogWrapper {
 
                 if (relX <= JBUI.scale(28) || e.getClickCount() == 2) {
                     clickedItem.setChecked(!clickedItem.isChecked());
-                } else if (getCheckedTableNames().isEmpty()) {
-                    clickedItem.setChecked(true);
                 }
 
                 activePreviewTableName = clickedItem.getTableName();
@@ -709,11 +728,19 @@ public class CodeGenerateDialog extends DialogWrapper {
         rightPreviewTitleLabel.setFont(UIUtil.getLabelFont().deriveFont(Font.BOLD, JBUI.scaleFontSize(12f)));
         rightPreviewTitleLabel.setForeground(SolidGlassTheme.textPrimary());
 
-        GlassButton refreshPreviewBtn = new GlassButton("刷新预览与字段解析");
+        rightPreviewTitleLabel.setMinimumSize(new Dimension(0, 0));
+        GlassButton refreshPreviewBtn = new GlassButton("刷新预览");
+        refreshPreviewBtn.setToolTipText("重新读取字段并更新生成文件预览");
         refreshPreviewBtn.addActionListener(e -> previewSelectedTableEnumsAsync());
 
-        headerRow.add(rightPreviewTitleLabel, BorderLayout.WEST);
+        ((BorderLayout) headerRow.getLayout()).setHgap(JBUI.scale(8));
+        headerRow.add(rightPreviewTitleLabel, BorderLayout.CENTER);
         headerRow.add(refreshPreviewBtn, BorderLayout.EAST);
+
+        JPanel previewHeading = new JPanel(new BorderLayout(0, 4));
+        previewHeading.setOpaque(false);
+        previewHeading.add(headerRow, BorderLayout.NORTH);
+        previewHeading.add(rightPreviewDetailsLabel, BorderLayout.SOUTH);
 
         JPanel outputDirRow = new JPanel(new BorderLayout(6, 0));
         outputDirRow.setOpaque(false);
@@ -742,7 +769,7 @@ public class CodeGenerateDialog extends DialogWrapper {
 
         JPanel northBox = new JPanel(new BorderLayout(0, 5));
         northBox.setOpaque(false);
-        northBox.add(headerRow, BorderLayout.NORTH);
+        northBox.add(previewHeading, BorderLayout.NORTH);
         northBox.add(outputDirRow, BorderLayout.SOUTH);
 
         filePreviewTableModel = new DefaultTableModel(new Object[]{"文件路径（相对输出目录）", "处理方式"}, 0) {
@@ -843,7 +870,7 @@ public class CodeGenerateDialog extends DialogWrapper {
     private void syncCheckedTablesToSummaryField() {
         List<String> checked = getCheckedTableNames();
         selectedTablesReadOnlyField.setText(String.join(",", checked));
-        leftTablePanelTitleLabel.setText("选择数据库表（已勾选 " + checked.size() + " 张参与生成）");
+        leftTablePanelTitleLabel.setText("选择生成表（已勾选 " + checked.size() + " 张参与生成）");
         if (StringUtils.isBlank(activePreviewTableName) && !checked.isEmpty()) {
             activePreviewTableName = checked.get(0);
         }
@@ -918,9 +945,10 @@ public class CodeGenerateDialog extends DialogWrapper {
 
         // 定制空态说明（替代 Nothing to show）
         StatusText beanEmptyText = beanQueryTable.getEmptyText();
-        beanEmptyText.setText("此表尚未添加扩展字段");
-        beanEmptyText.appendSecondaryText("用于向 EntityQuery 追加非表原生查询参数（如关键字 keyword、时间范围起止字段），点击上方「+ 新增变量」添加",
-                com.intellij.ui.SimpleTextAttributes.GRAYED_ATTRIBUTES, null);
+        beanEmptyText.setText("尚未添加扩展字段", new com.intellij.ui.SimpleTextAttributes(
+                com.intellij.ui.SimpleTextAttributes.STYLE_PLAIN, SolidGlassTheme.textSecondary()));
+        beanEmptyText.appendSecondaryText("可添加关键词、时间范围等非表字段参数", new com.intellij.ui.SimpleTextAttributes(
+                com.intellij.ui.SimpleTextAttributes.STYLE_PLAIN, SolidGlassTheme.textMuted()), null);
 
         JPanel beanBtnBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         beanBtnBar.setOpaque(false);
@@ -929,14 +957,19 @@ public class CodeGenerateDialog extends DialogWrapper {
         beanTitle.setForeground(SolidGlassTheme.textPrimary());
         beanBtnBar.add(beanTitle);
 
-        GlassButton addBeanRowBtn = new GlassButton("+ 新增变量", true);
+        GlassButton addBeanRowBtn = new GlassButton("+ 新增扩展字段");
         addBeanRowBtn.addActionListener(e -> beanQueryTableModel.addRow(new Object[]{"", "String", ""}));
         GlassButton removeBeanRowBtn = new GlassButton("- 删除选中");
         removeBeanRowBtn.addActionListener(e -> removeSelectedRows(beanQueryTable, beanQueryTableModel));
         GlassButton clearBeanBtn = new GlassButton("清空");
         clearBeanBtn.addActionListener(e -> beanQueryTableModel.setRowCount(0));
         reloadQueryCacheBtn = new GlassButton("重载当前表缓存");
-        reloadQueryCacheBtn.addActionListener(e -> reloadQueryTablesForCurrentTable());
+        reloadQueryCacheBtn.addActionListener(e -> {
+            beanQueryDrafts.remove(loadedQueryTableName);
+            serviceQueryDrafts.remove(loadedQueryTableName);
+            loadedQueryTableName = "";
+            reloadQueryTablesForCurrentTable();
+        });
 
         beanBtnBar.add(addBeanRowBtn);
         beanBtnBar.add(removeBeanRowBtn);
@@ -968,9 +1001,10 @@ public class CodeGenerateDialog extends DialogWrapper {
 
         // 定制空态说明（替代 Nothing to show）
         StatusText serviceEmptyText = serviceQueryTable.getEmptyText();
-        serviceEmptyText.setText("此表尚未添加自定义查询条件");
-        serviceEmptyText.appendSecondaryText("用于在 ServiceQuery 中自动组装 MyBatis-Plus QueryWrapper 查询逻辑（如模糊查询、in、between 区间等）",
-                com.intellij.ui.SimpleTextAttributes.GRAYED_ATTRIBUTES, null);
+        serviceEmptyText.setText("尚未添加查询条件", new com.intellij.ui.SimpleTextAttributes(
+                com.intellij.ui.SimpleTextAttributes.STYLE_PLAIN, SolidGlassTheme.textSecondary()));
+        serviceEmptyText.appendSecondaryText("可配置模糊查询、in、between 等 QueryWrapper 条件", new com.intellij.ui.SimpleTextAttributes(
+                com.intellij.ui.SimpleTextAttributes.STYLE_PLAIN, SolidGlassTheme.textMuted()), null);
 
         JPanel serviceBtnBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         serviceBtnBar.setOpaque(false);
@@ -979,7 +1013,7 @@ public class CodeGenerateDialog extends DialogWrapper {
         serviceTitle.setForeground(SolidGlassTheme.textPrimary());
         serviceBtnBar.add(serviceTitle);
 
-        GlassButton addServiceRowBtn = new GlassButton("+ 新增查询条件", true);
+        GlassButton addServiceRowBtn = new GlassButton("+ 新增查询条件");
         addServiceRowBtn.addActionListener(e -> serviceQueryTableModel.addRow(
                 new Object[]{"0:等于", "", "", Boolean.TRUE, "", "", ""}
         ));
@@ -1023,14 +1057,19 @@ public class CodeGenerateDialog extends DialogWrapper {
         DocumentAdapter resetVerifyListener = new DocumentAdapter() {
             @Override
             protected void textChanged(@NotNull DocumentEvent e) {
+                databaseConfigVersion++;
                 dbConnectionVerified = false;
-                dbPageStatusBadge.setStatus("连接状态：未验证", GlyphState.IDLE);
+                lastVerifiedDbTableCount = 0;
+                resolvedTableColumnsCache.clear();
+                dbPageStatusBadge.setStatus("连接状态：未验证，请重新加载表清单", GlyphState.IDLE);
                 updateSummaryAndSourceIndicators();
+                refreshFileImpactPreview();
             }
         };
         jdbcUrlField.getDocument().addDocumentListener(resetVerifyListener);
         databaseField.getDocument().addDocumentListener(resetVerifyListener);
         usernameField.getDocument().addDocumentListener(resetVerifyListener);
+        passwordField.getDocument().addDocumentListener(resetVerifyListener);
 
         JPanel form = FormBuilder.createFormBuilder()
                 .addLabeledComponent("JDBC URL (支持 MySQL/PG/Oracle/DM):", jdbcUrlField)
@@ -1047,38 +1086,7 @@ public class CodeGenerateDialog extends DialogWrapper {
         btnBar.setOpaque(false);
 
         GlassButton testConnBtn = new GlassButton("测试连接并加载表清单", true);
-        testConnBtn.addActionListener(e -> {
-            syncDbFieldsToState();
-            currentSourceMode = DataSourceMode.DATABASE;
-            dbPageStatusBadge.setStatus("连接状态：正在验证...", GlyphState.WORKING);
-            updateSummaryAndSourceIndicators();
-
-            ProgressManager.getInstance().run(new Task.Backgroundable(project, "Testing Database Connection...", false) {
-                @Override
-                public void run(@NotNull ProgressIndicator indicator) {
-                    try (Connection conn = CodeGenerateUtils.getDblink(project, projectRootPath)) {
-                        List<String> tables = CodeGenerateUtils.getAllTablesWithComments(conn, databaseField.getText().trim());
-                        ApplicationManager.getApplication().invokeLater(() -> {
-                            dbConnectionVerified = true;
-                            lastVerifiedDbTableCount = tables.size();
-                            dbPageStatusBadge.setStatus("连接成功（共 " + tables.size() + " 张表）", GlyphState.READY);
-                            populateMasterTablesFromDbList(tables);
-                        });
-                    } catch (Exception ex) {
-                        ApplicationManager.getApplication().invokeLater(() -> {
-                            dbConnectionVerified = false;
-                            dbPageStatusBadge.setStatus("连接失败：" + StringUtils.abbreviate(ex.getMessage(), 36), GlyphState.ERROR);
-                            verificationBadge.setStatus("连接失败", GlyphState.ERROR);
-                            Messages.showErrorDialog(
-                                    project,
-                                    "连接失败：" + ex.getMessage(),
-                                    "连接错误"
-                            );
-                        });
-                    }
-                }
-            });
-        });
+        testConnBtn.addActionListener(e -> fetchDatabaseTablesAsync());
 
         GlassButton scanSpringBtn = new GlassButton("从 Spring 配置识别数据源");
         scanSpringBtn.addActionListener(e -> {
@@ -1139,6 +1147,14 @@ public class CodeGenerateDialog extends DialogWrapper {
      */
     private JComponent createOfflineDdlPanel() {
         SolidGlassPanel ddlCard = new SolidGlassPanel(new BorderLayout(0, 8), Thickness.MEDIUM);
+        ddlSqlPane.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) { ddlTextChanged(); }
+            @Override
+            public void removeUpdate(DocumentEvent e) { ddlTextChanged(); }
+            @Override
+            public void changedUpdate(DocumentEvent e) { }
+        });
 
         JPanel topBar = new JPanel(new BorderLayout());
         topBar.setOpaque(false);
@@ -1165,6 +1181,15 @@ public class CodeGenerateDialog extends DialogWrapper {
         clearSqlOnlyBtn.addActionListener(e -> {
             ddlSqlPane.setText("");
             parsedDdlTables.clear();
+            lastParsedDdlScript = null;
+            if (currentSourceMode == DataSourceMode.OFFLINE_DDL) {
+                masterTableMap.clear();
+                resolvedTableColumnsCache.clear();
+                activePreviewTableName = "";
+                filterTableList(tableSearchField.getText());
+                syncCheckedTablesToSummaryField();
+                reloadQueryTablesForCurrentTable();
+            }
             ddlSingleLineSummaryBadge.setStatus("已清空 SQL 内容（待输入 CREATE TABLE 语句）", GlyphState.IDLE);
             updateSummaryAndSourceIndicators();
             refreshFileImpactPreview();
@@ -1177,6 +1202,7 @@ public class CodeGenerateDialog extends DialogWrapper {
         // 独立操作 2：切换来源为数据库连接
         GlassButton switchToDbModeBtn = new GlassButton("切换为数据库连接来源");
         switchToDbModeBtn.addActionListener(e -> {
+            databaseConfigVersion++;
             currentSourceMode = DataSourceMode.DATABASE;
             updateSummaryAndSourceIndicators();
             if (mainTabbedPane != null) {
@@ -1224,13 +1250,7 @@ public class CodeGenerateDialog extends DialogWrapper {
         if (StringUtils.isBlank(tableName)) {
             return null;
         }
-        List<Table> cols;
-        DdlSqlParser.ParsedTable pt = parsedDdlTables.get(tableName);
-        if (pt != null) {
-            cols = pt.getColumns();
-        } else {
-            cols = resolvedTableColumnsCache.get(tableName.toLowerCase(Locale.ROOT));
-        }
+        List<Table> cols = getResolvedColumnsForTable(tableName);
         if (cols == null) {
             return null;
         }
@@ -1254,14 +1274,40 @@ public class CodeGenerateDialog extends DialogWrapper {
      * 1. 分离更新顶栏「来源类型 SourceBadge」与「连接/解析验证状态 StatusGlyph」
      * 2. 当 0 张表勾选或 0 个生成选项勾选时，底部严格显示「待生成：0 张表 · 0 个文件」，并同步禁用「开始生成」主按钮
      */
+    private List<String> missingOfflineTables() {
+        return getCheckedTableNames().stream()
+                .filter(table -> parsedDdlTables.keySet().stream().noneMatch(table::equalsIgnoreCase))
+                .collect(Collectors.toList());
+    }
+
+    private boolean ddlNeedsParsing() {
+        return parsedDdlTables.isEmpty() || lastParsedDdlScript == null
+                || !lastParsedDdlScript.equals(ddlSqlPane.getText());
+    }
+
+    private void ddlTextChanged() {
+        if (ddlNeedsParsing()) {
+            ddlSingleLineSummaryBadge.setStatus("SQL 已修改，请重新解析", GlyphState.WARNING);
+        } else {
+            ddlSingleLineSummaryBadge.setStatus("解析结果已同步 · " + parsedDdlTables.size() + " 张表", GlyphState.READY);
+        }
+        updateSummaryAndSourceIndicators();
+        refreshFileImpactPreview();
+    }
+
     private void updateSummaryAndSourceIndicators() {
         List<String> checkedTables = getCheckedTableNames();
         int tableCount = checkedTables.size();
 
         // 1. 分离显示「来源类型（中性）」与「验证结果（仅成功时用绿色）」
-        if (currentSourceMode == DataSourceMode.OFFLINE_DDL || !parsedDdlTables.isEmpty()) {
+        loadTablesBtn.setText(currentSourceMode == DataSourceMode.OFFLINE_DDL
+                ? "切换并加载数据库表" : "加载表清单");
+        loadTablesBtn.setToolTipText("从数据库读取表清单；成功后替换当前来源和选表列表");
+        if (currentSourceMode == DataSourceMode.OFFLINE_DDL) {
             sourceBadge.setSourceText("来源：离线 DDL");
-            if (!parsedDdlTables.isEmpty()) {
+            if (ddlNeedsParsing()) {
+                verificationBadge.setStatus("DDL 待重新解析", GlyphState.WARNING);
+            } else if (!parsedDdlTables.isEmpty()) {
                 int totalCols = parsedDdlTables.values().stream().mapToInt(t -> t.getColumns().size()).sum();
                 verificationBadge.setStatus("解析成功 (" + parsedDdlTables.size() + " 张表 · " + totalCols + " 个字段)", GlyphState.READY);
             } else {
@@ -1302,7 +1348,10 @@ public class CodeGenerateDialog extends DialogWrapper {
         }
 
         // 3. 底部「待生成」总量统计与「开始生成」主按钮启用/禁用控制
-        boolean canExecute = (tableCount > 0 && selectedOptions > 0);
+        boolean sourceReady = currentSourceMode == DataSourceMode.OFFLINE_DDL
+                ? !ddlNeedsParsing() && missingOfflineTables().isEmpty()
+                : dbConnectionVerified && parsedDdlTables.isEmpty();
+        boolean canExecute = tableCount > 0 && selectedOptions > 0 && sourceReady;
         setOKActionEnabled(canExecute);
 
         String strategyShortName = (String) writeStrategyCombo.getSelectedItem();
@@ -1314,6 +1363,12 @@ public class CodeGenerateDialog extends DialogWrapper {
             footerSummaryLabel.setText("待生成：" + tableCount + " 张表 · 0 个文件（请至少勾选 1 个生成选项）");
             footerSummaryLabel.setForeground(SolidGlassTheme.warningFg());
             getOKAction().putValue(Action.SHORT_DESCRIPTION, "请至少勾选 1 个生成选项");
+        } else if (!sourceReady) {
+            String reason = currentSourceMode == DataSourceMode.OFFLINE_DDL
+                    ? "请解析所有勾选表的 DDL 后生成" : "请验证连接并重新加载表清单";
+            footerSummaryLabel.setText("待生成：" + tableCount + " 张表 · " + reason);
+            footerSummaryLabel.setForeground(SolidGlassTheme.warningFg());
+            getOKAction().putValue(Action.SHORT_DESCRIPTION, reason);
         } else {
             footerSummaryLabel.setForeground(SolidGlassTheme.textPrimary());
             getOKAction().putValue(Action.SHORT_DESCRIPTION, "对已勾选的 " + tableCount + " 张表执行代码生成");
@@ -1330,7 +1385,7 @@ public class CodeGenerateDialog extends DialogWrapper {
                     totalEnums += eCount;
                     totalExact += baseFilesPerTable + eCount;
                 }
-                fileCountDesc = "实际 " + totalExact + " 个文件（" + (tableCount * baseFilesPerTable) + " 个基础 + " + totalEnums + " 个枚举）";
+                fileCountDesc = "计划生成 " + totalExact + " 个文件（" + (tableCount * baseFilesPerTable) + " 个基础 + " + totalEnums + " 个枚举）";
             } else {
                 fileCountDesc = "预计 " + (tableCount * baseFilesPerTable) + " 个基础文件（另含条件枚举）";
             }
@@ -1366,8 +1421,18 @@ public class CodeGenerateDialog extends DialogWrapper {
         }
 
         if (StringUtils.isBlank(previewTable)) {
-            rightPreviewTitleLabel.setText("生成文件预览（未选择预览表）");
-            fieldParseSummaryLabel.setText("请在左侧加载或添加数据库表，点击任意行即可预览该表对应的生成文件清单。");
+            rightPreviewTitleLabel.setText("生成文件预览");
+            rightPreviewTitleLabel.setToolTipText(null);
+            rightPreviewDetailsLabel.setText("未选择预览表");
+            fieldParseSummaryLabel.setText("请在左侧加载或添加生成表，点击任意行即可预览该表对应的生成文件清单。");
+            return;
+        }
+
+        if (currentSourceMode == DataSourceMode.DATABASE && !dbConnectionVerified) {
+            rightPreviewTitleLabel.setText("生成文件预览 · " + previewTable);
+            rightPreviewTitleLabel.setToolTipText(previewTable);
+            rightPreviewDetailsLabel.setText("连接未验证，请重新加载表清单");
+            fieldParseSummaryLabel.setText("字段解析：旧数据库元数据已失效");
             return;
         }
 
@@ -1429,11 +1494,14 @@ public class CodeGenerateDialog extends DialogWrapper {
         }
 
         boolean isCheckedForGen = checked.stream().anyMatch(previewTable::equalsIgnoreCase);
-        String checkStateTag = isCheckedForGen ? "[已勾选参与生成]" : "[仅预览 · 未勾选]";
+        String checkStateTag = isCheckedForGen ? "参与生成" : "仅预览，未勾选";
         String fileCountTag = (resolvedEnums != null || (enumCb != null && !enumCb.isSelected()))
-                ? (" · 单表实际 " + previewFileCount + " 个文件")
-                : (" · 单表预计 " + previewFileCount + "+ 个文件");
-        rightPreviewTitleLabel.setText("生成文件预览 — " + previewTable + " " + checkStateTag + fileCountTag);
+                ? (" · 计划生成 " + previewFileCount + " 个文件")
+                : (" · 预计 " + previewFileCount + " 个基础文件，枚举待解析");
+        rightPreviewTitleLabel.setText("生成文件预览 · " + previewTable);
+        rightPreviewTitleLabel.setToolTipText(previewTable);
+        rightPreviewDetailsLabel.setText(currentSourceMode == DataSourceMode.OFFLINE_DDL && ddlNeedsParsing()
+                ? "SQL 已修改，以下为上次解析结果" : checkStateTag + fileCountTag);
 
         List<Table> cols = getResolvedColumnsForTable(previewTable);
         if (cols != null) {
@@ -1443,7 +1511,7 @@ public class CodeGenerateDialog extends DialogWrapper {
             fieldParseSummaryLabel.setText("预览表 [" + previewTable + "] 字段统计：共 " + cols.size() + " 列 · 识别 "
                     + enumCount + " 个枚举列 · " + valCount + " 列含校验注解");
         } else {
-            fieldParseSummaryLabel.setText("预览表 [" + previewTable + "] 字段统计：尚未读取列元数据，点击右上角「刷新预览与字段解析」可精确计算枚举文件");
+            fieldParseSummaryLabel.setText("预览表 [" + previewTable + "] 字段统计：尚未读取列元数据，点击右上角「刷新预览」可精确计算枚举文件");
         }
     }
 
@@ -1452,9 +1520,13 @@ public class CodeGenerateDialog extends DialogWrapper {
         if (StringUtils.isBlank(tableName)) {
             return null;
         }
-        DdlSqlParser.ParsedTable pt = parsedDdlTables.get(tableName);
-        if (pt != null) {
-            return pt.getColumns();
+        if (currentSourceMode == DataSourceMode.OFFLINE_DDL) {
+            for (DdlSqlParser.ParsedTable parsed : parsedDdlTables.values()) {
+                if (parsed.getTableName().equalsIgnoreCase(tableName)) {
+                    return parsed.getColumns();
+                }
+            }
+            return null;
         }
         return resolvedTableColumnsCache.get(tableName.toLowerCase(Locale.ROOT));
     }
@@ -1487,14 +1559,16 @@ public class CodeGenerateDialog extends DialogWrapper {
             masterTableMap.put(tName, new TableItem(tName, comment, check));
         }
         currentSourceMode = DataSourceMode.DATABASE;
+        resolvedTableColumnsCache.clear();
         dbConnectionVerified = true;
         lastVerifiedDbTableCount = rawDbTableStrings.size();
         parsedDdlTables.clear();
-        if (StringUtils.isBlank(activePreviewTableName) && !masterTableMap.isEmpty()) {
-            activePreviewTableName = masterTableMap.keySet().iterator().next();
+        if (!masterTableMap.containsKey(activePreviewTableName)) {
+            activePreviewTableName = masterTableMap.isEmpty() ? "" : masterTableMap.keySet().iterator().next();
         }
         filterTableList(tableSearchField.getText());
         syncCheckedTablesToSummaryField();
+        reloadQueryTablesForCurrentTable();
     }
 
     private void parseDdlAndPopulateTables(boolean showDialog) {
@@ -1512,7 +1586,9 @@ public class CodeGenerateDialog extends DialogWrapper {
             return;
         }
 
+        databaseConfigVersion++;
         currentSourceMode = DataSourceMode.OFFLINE_DDL;
+        lastParsedDdlScript = script;
         masterTableMap.clear();
         int totalCols = 0;
         int totalEnums = 0;
@@ -1570,21 +1646,32 @@ public class CodeGenerateDialog extends DialogWrapper {
 
     private void fetchDatabaseTablesAsync() {
         syncDbFieldsToState();
-        currentSourceMode = DataSourceMode.DATABASE;
+        int requestVersion = ++databaseConfigVersion;
+        DataSourceMode sourceAtStart = currentSourceMode;
+        String databaseName = databaseField.getText().trim();
+        dbConnectionVerified = false;
+        resolvedTableColumnsCache.clear();
+        updateSummaryAndSourceIndicators();
+        refreshFileImpactPreview();
+        dbPageStatusBadge.setStatus("正在连接数据库...", GlyphState.WORKING);
         verificationBadge.setStatus("正在连接数据库...", GlyphState.WORKING);
         ProgressManager.getInstance().run(new Task.Backgroundable(project, "Loading Database Tables...", false) {
             @Override
             public void run(@NotNull ProgressIndicator indicator) {
                 try (Connection conn = CodeGenerateUtils.getDblink(project, projectRootPath)) {
-                    List<String> tables = CodeGenerateUtils.getAllTablesWithComments(conn, databaseField.getText().trim());
+                    List<String> tables = CodeGenerateUtils.getAllTablesWithComments(conn, databaseName);
                     ApplicationManager.getApplication().invokeLater(() -> {
+                        if (requestVersion != databaseConfigVersion || currentSourceMode != sourceAtStart) return;
                         dbPageStatusBadge.setStatus("连接成功（共 " + tables.size() + " 张表）", GlyphState.READY);
                         populateMasterTablesFromDbList(tables);
                     });
                 } catch (Exception ex) {
                     ApplicationManager.getApplication().invokeLater(() -> {
+                        if (requestVersion != databaseConfigVersion || currentSourceMode != sourceAtStart) return;
                         dbConnectionVerified = false;
-                        verificationBadge.setStatus("连接失败", GlyphState.ERROR);
+                        updateSummaryAndSourceIndicators();
+                        refreshFileImpactPreview();
+                        if (currentSourceMode == DataSourceMode.DATABASE) verificationBadge.setStatus("连接失败", GlyphState.ERROR);
                         dbPageStatusBadge.setStatus("连接失败", GlyphState.ERROR);
                         Messages.showErrorDialog(
                                 project,
@@ -1604,28 +1691,35 @@ public class CodeGenerateDialog extends DialogWrapper {
             refreshFileImpactPreview();
             return;
         }
-        if (parsedDdlTables.containsKey(targetTable)) {
+        if (currentSourceMode == DataSourceMode.OFFLINE_DDL) {
             updateSummaryAndSourceIndicators();
             refreshFileImpactPreview();
             return;
         }
 
+        if (!dbConnectionVerified) {
+            refreshFileImpactPreview();
+            return;
+        }
         syncDbFieldsToState();
+        int requestVersion = databaseConfigVersion;
+        String databaseName = databaseField.getText().trim();
         verificationBadge.setStatus("正在读取表字段：" + targetTable, GlyphState.WORKING);
         ProgressManager.getInstance().run(new Task.Backgroundable(project, "Parsing Table Metadata...", false) {
             @Override
             public void run(@NotNull ProgressIndicator indicator) {
                 try (Connection conn = CodeGenerateUtils.getDblink(project, projectRootPath)) {
-                    List<Table> columns = CodeGenerateUtils.getList(conn, targetTable, databaseField.getText().trim());
+                    List<Table> columns = CodeGenerateUtils.getList(conn, targetTable, databaseName);
                     ValidationAnnotationResolver.enrichValidationAnnotations(columns, enableValidationCheckBox.isSelected());
                     ApplicationManager.getApplication().invokeLater(() -> {
-                        dbConnectionVerified = true;
+                        if (requestVersion != databaseConfigVersion || currentSourceMode != DataSourceMode.DATABASE) return;
                         resolvedTableColumnsCache.put(targetTable.toLowerCase(Locale.ROOT), columns);
                         updateSummaryAndSourceIndicators();
                         refreshFileImpactPreview();
                     });
                 } catch (Exception ex) {
                     ApplicationManager.getApplication().invokeLater(() -> {
+                        if (requestVersion != databaseConfigVersion || currentSourceMode != DataSourceMode.DATABASE) return;
                         verificationBadge.setStatus("读取字段失败", GlyphState.ERROR);
                         refreshFileImpactPreview();
                     });
@@ -1641,6 +1735,11 @@ public class CodeGenerateDialog extends DialogWrapper {
         List<String> checked = getCheckedTableNames();
         String tableKey = StringUtils.defaultIfBlank(activePreviewTableName, checked.isEmpty() ? "" : checked.get(0));
 
+        if (tableKey.equals(loadedQueryTableName)) {
+            return;
+        }
+        saveCurrentQueryDraft();
+        loadedQueryTableName = tableKey;
         if (StringUtils.isBlank(tableKey)) {
             queryPageTargetTableLabel.setText("规则作用于：未选择表（请先在「生成配置与选表」页选择表）");
             if (reloadQueryCacheBtn != null) {
@@ -1659,7 +1758,8 @@ public class CodeGenerateDialog extends DialogWrapper {
         beanQueryTableModel.setRowCount(0);
         serviceQueryTableModel.setRowCount(0);
 
-        List<BeanQuery> beanQueries = settingsService.getBeanQueryList(tableKey, projectRootPath);
+        List<BeanQuery> beanQueries = beanQueryDrafts.containsKey(tableKey)
+                ? beanQueryDrafts.get(tableKey) : settingsService.getBeanQueryList(tableKey, projectRootPath);
         for (BeanQuery bq : beanQueries) {
             beanQueryTableModel.addRow(new Object[]{
                     StringUtils.defaultString(bq.getName()),
@@ -1668,7 +1768,8 @@ public class CodeGenerateDialog extends DialogWrapper {
             });
         }
 
-        List<ServiceQuery> serviceQueries = settingsService.getServiceQueryList(tableKey, projectRootPath);
+        List<ServiceQuery> serviceQueries = serviceQueryDrafts.containsKey(tableKey)
+                ? serviceQueryDrafts.get(tableKey) : settingsService.getServiceQueryList(tableKey, projectRootPath);
         for (ServiceQuery sq : serviceQueries) {
             int typeIdx = 0;
             try {
@@ -1739,8 +1840,14 @@ public class CodeGenerateDialog extends DialogWrapper {
     @Nullable
     @Override
     protected ValidationInfo doValidate() {
-        if (getCheckedTableNames().isEmpty() && StringUtils.isNotBlank(ddlSqlPane.getText())) {
-            parseDdlAndPopulateTables(false);
+        if (currentSourceMode == DataSourceMode.OFFLINE_DDL && ddlNeedsParsing()) {
+            return new ValidationInfo("SQL 已修改，请先重新解析 DDL", ddlSqlPane);
+        }
+        if (currentSourceMode == DataSourceMode.OFFLINE_DDL && !missingOfflineTables().isEmpty()) {
+            return new ValidationInfo("离线 DDL 未包含选中表：" + String.join(", ", missingOfflineTables()), selectedTablesReadOnlyField);
+        }
+        if (currentSourceMode == DataSourceMode.DATABASE && (!dbConnectionVerified || !parsedDdlTables.isEmpty())) {
+            return new ValidationInfo("请验证连接并重新加载表清单", tableSearchField);
         }
         if (StringUtils.isBlank(authorField.getText())) {
             return new ValidationInfo("请输入作者名称", authorField);
@@ -1749,7 +1856,7 @@ public class CodeGenerateDialog extends DialogWrapper {
             return new ValidationInfo("请输入模块名称", moduleField);
         }
         if (getCheckedTableNames().isEmpty()) {
-            return new ValidationInfo("请在左侧「选择数据库表」列表中勾选至少 1 张参与生成的表", selectedTablesReadOnlyField);
+            return new ValidationInfo("请在左侧「选择生成表」列表中勾选至少 1 张参与生成的表", selectedTablesReadOnlyField);
         }
         boolean anySelected = targetCheckBoxes.values().stream().anyMatch(AbstractButton::isSelected);
         if (!anySelected) {
@@ -1767,10 +1874,10 @@ public class CodeGenerateDialog extends DialogWrapper {
             serviceQueryTable.getCellEditor().stopCellEditing();
         }
 
-        if (getCheckedTableNames().isEmpty() && StringUtils.isNotBlank(ddlSqlPane.getText())) {
-            parseDdlAndPopulateTables(false);
+        if (doValidate() != null) {
+            super.doOKAction();
+            return;
         }
-
         syncCheckedTablesToSummaryField();
         syncDbFieldsToState();
 
@@ -1782,7 +1889,7 @@ public class CodeGenerateDialog extends DialogWrapper {
         params.put("docStyle", getSelectedDocStyleCode());
         params.put("enableValidation", enableValidationCheckBox.isSelected());
 
-        if (!parsedDdlTables.isEmpty()) {
+        if (currentSourceMode == DataSourceMode.OFFLINE_DDL && !parsedDdlTables.isEmpty()) {
             params.put("parsedDdlTables", new LinkedHashMap<>(parsedDdlTables));
         } else {
             params.remove("parsedDdlTables");
@@ -1798,7 +1905,36 @@ public class CodeGenerateDialog extends DialogWrapper {
             params.put(entry.getKey(), entry.getValue().isSelected() ? "y" : "n");
         }
 
-        String cacheKey = StringUtils.defaultIfBlank(activePreviewTableName, tableKey);
+        saveCurrentQueryDraft();
+        beanQueryDrafts.forEach((key, value) -> settingsService.saveBeanQueryList(key, value, projectRootPath));
+        serviceQueryDrafts.forEach((key, value) -> settingsService.saveServiceQueryList(key, value, projectRootPath));
+        Map<String, List<BeanQuery>> beanQueriesByTable = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        Map<String, List<ServiceQuery>> serviceQueriesByTable = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        for (String table : getCheckedTableNames()) {
+            beanQueriesByTable.put(table, settingsService.getBeanQueryList(table, projectRootPath));
+            serviceQueriesByTable.put(table, settingsService.getServiceQueryList(table, projectRootPath));
+        }
+        params.put("beanQueryByTable", beanQueriesByTable);
+        params.put("serviceQueryListByTable", serviceQueriesByTable);
+        params.put("beanQuery", beanQueryDrafts.getOrDefault(loadedQueryTableName, Collections.emptyList()));
+        params.put("serviceQueryList", serviceQueryDrafts.getOrDefault(loadedQueryTableName, Collections.emptyList()));
+
+        super.doOKAction();
+        if (onConfirmCallback != null) {
+            onConfirmCallback.run();
+        }
+    }
+
+    private void saveCurrentQueryDraft() {
+        if (StringUtils.isBlank(loadedQueryTableName)) {
+            return;
+        }
+        if (beanQueryTable.isEditing()) {
+            beanQueryTable.getCellEditor().stopCellEditing();
+        }
+        if (serviceQueryTable.isEditing()) {
+            serviceQueryTable.getCellEditor().stopCellEditing();
+        }
         List<BeanQuery> beanQueries = Lists.newArrayList();
         for (int i = 0; i < beanQueryTableModel.getRowCount(); i++) {
             String name = StringUtils.trimToEmpty(String.valueOf(beanQueryTableModel.getValueAt(i, 0)));
@@ -1813,8 +1949,7 @@ public class CodeGenerateDialog extends DialogWrapper {
                 beanQueries.add(bq);
             }
         }
-        settingsService.saveBeanQueryList(cacheKey, beanQueries, projectRootPath);
-        params.put("beanQuery", beanQueries);
+        beanQueryDrafts.put(loadedQueryTableName, beanQueries);
 
         List<ServiceQuery> serviceQueries = Lists.newArrayList();
         for (int i = 0; i < serviceQueryTableModel.getRowCount(); i++) {
@@ -1839,13 +1974,7 @@ public class CodeGenerateDialog extends DialogWrapper {
                 serviceQueries.add(sq);
             }
         }
-        settingsService.saveServiceQueryList(cacheKey, serviceQueries, projectRootPath);
-        params.put("serviceQueryList", serviceQueries);
-
-        super.doOKAction();
-        if (onConfirmCallback != null) {
-            onConfirmCallback.run();
-        }
+        serviceQueryDrafts.put(loadedQueryTableName, serviceQueries);
     }
 
     private int indexOfJavaType(String format) {
