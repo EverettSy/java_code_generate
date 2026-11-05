@@ -7,7 +7,7 @@
     <name>Syrobin Java Code Generate</name>
 
     <!-- 插件版本 -->
-    <version>2.1.0</version>
+    <version>2.2.0</version>
 
     <!-- 作者信息 -->
     <vendor
@@ -46,6 +46,14 @@
 
     <!-- 版本更新说明 -->
     <change-notes><![CDATA[
+        <h3>v2.2.0 - UI Refinement &amp; Generation Reliability (界面优化与生成可靠性修复)</h3>
+        <ul>
+            <li>Refined table selection, file previews, Query empty states, and source/verification status (优化选表、文件预览、Query 空态及来源验证状态)。</li>
+            <li>Isolated per-table Query fields and conditions during batch generation (修复批量生成时不同表的 Query 规则串用)。</li>
+            <li>Rejected tables absent from offline DDL without JDBC fallback (离线模式拒绝未知表，禁止回退数据库)。</li>
+            <li>Invalidated metadata previews and stale requests after connection changes (连接变更后使旧元数据预览和过期请求失效)。</li>
+        </ul>
+
         <h3>v2.1.0 - Full Architecture &amp; Intelligence Upgrade (全架构与智能化升级)</h3>
         <ul>
             <li><b>Brand &amp; Visual Upgrade (品牌与视觉升级):</b> Updated plugin ID (<code>com.syrobin.java.code.generate</code>), author metadata (<b>syrobin</b>), and custom vector icons for Light &amp; Dark themes.</li>

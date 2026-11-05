@@ -95,7 +95,7 @@ public class SklCodeGenConfigurable implements Configurable {
 
         JPanel header = SolidGlassTheme.createCompactHeader(
                 "Syrobin Code Generate · 全局策略与模板中心",
-                "v2.1.0",
+                "v2.2.0",
                 statusGlyph
         );
 

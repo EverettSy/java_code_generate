@@ -348,7 +348,7 @@ public class CodeGenerateDialog extends DialogWrapper {
 
         JPanel compactHeader = SolidGlassTheme.createCompactHeader(
                 "Syrobin Code Generate",
-                "v2.1.0",
+                "v2.2.0",
                 sourceAreaRight
         );
 
