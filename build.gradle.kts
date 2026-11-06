@@ -5,7 +5,7 @@ import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 plugins {
     id("java")
     // IntelliJ Platform Gradle Plugin：打包、运行 IDE、发布插件
-    id("org.jetbrains.intellij.platform") version "2.13.1"
+    id("org.jetbrains.intellij.platform") version "2.17.0"
 }
 
 group = "com.syrobin"
@@ -22,14 +22,21 @@ repositories {
 dependencies {
     // 开发/运行插件所基于的 IDE 版本与平台测试框架
     intellijPlatform {
-        intellijIdea("2026.1")
+        val localIdePath = providers.gradleProperty("javaCodeGenerateIdePath").orNull
+        if (localIdePath == null) {
+            intellijIdea("2026.1")
+        } else {
+            local(localIdePath)
+        }
         testFramework(TestFrameworkType.Platform)
+        testBundledPlugin("com.intellij.java")
     }
 
     // 模板与工具库
     implementation("org.freemarker:freemarker:2.3.29")
     implementation("org.apache.commons:commons-lang3:3.9")
     implementation("com.google.guava:guava:27.0.1-jre")
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.22.4")
     implementation("cn.hutool:hutool-all:5.6.3")
     implementation("redis.clients:jedis:3.1.0")
     implementation("mysql:mysql-connector-java:8.0.19")
