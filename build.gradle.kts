@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.syrobin"
-version = "2.2.0"
+version = "3.0.0"
 
 repositories {
     mavenCentral()
@@ -20,11 +20,11 @@ repositories {
 }
 
 dependencies {
-    // 开发/运行插件所基于的 IDE 版本与平台测试框架
+    // 开发/运行插件所基于的 IDE 版本与平台测试框架（IDEA 2026.3 / Java 25）
     intellijPlatform {
         val localIdePath = providers.gradleProperty("javaCodeGenerateIdePath").orNull
         if (localIdePath == null) {
-            intellijIdea("2026.1")
+            intellijIdea("2026.3")
         } else {
             local(localIdePath)
         }
@@ -32,14 +32,10 @@ dependencies {
         testBundledPlugin("com.intellij.java")
     }
 
-    // 模板与工具库
-    implementation("org.freemarker:freemarker:2.3.29")
-    implementation("org.apache.commons:commons-lang3:3.9")
-    implementation("com.google.guava:guava:27.0.1-jre")
+    // 仅打包模板与 JSON 工具。JDBC 驱动由 DatabaseDialect 从本机仓库动态加载；不再打包 jedis/mysql/guava/hutool。
+    implementation("org.freemarker:freemarker:2.3.35")
+    implementation("org.apache.commons:commons-lang3:3.21.0")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.22.4")
-    implementation("cn.hutool:hutool-all:5.6.3")
-    implementation("redis.clients:jedis:3.1.0")
-    implementation("mysql:mysql-connector-java:8.0.19")
 
     // 单元测试依赖（与 IntelliJ Platform TestFramework 原生兼容）
     testImplementation("junit:junit:4.13.2")
@@ -52,6 +48,7 @@ intellijPlatform {
     pluginConfiguration {
         // 兼容的 IDE 构建号区间（sinceBuild / untilBuild）
         ideaVersion {
+            // 223 = 2022.3（JBR 17 起点），配合 --release 17 字节码覆盖 2022.3 ~ 2027.1 全量主流存量用户
             sinceBuild = "233"
             untilBuild = "271.*"
         }
@@ -71,16 +68,30 @@ intellijPlatform {
 }
 
 tasks {
+    register("checkReleaseTag") {
+        val expectedTag = "v${project.version}"
+        val releaseTag = providers.environmentVariable("GITHUB_REF_NAME").orNull
+        doLast {
+            check(releaseTag == expectedTag) {
+                "Release tag '${releaseTag ?: "(unset)"}' does not match project version. Expected '$expectedTag'."
+            }
+        }
+    }
+
     withType<JavaCompile> {
-        // 使用 release 21 确保在 JDK 21 ~ JDK 25+ 编译时均生成兼容 IDEA JBR 21 的字节码
-        sourceCompatibility = "21"
-        targetCompatibility = "21"
-        options.release.set(21)
+        // 使用 JDK 25 编译并输出 Java 17 字节码（class version 61），兼容 IDEA 2023.3 (JBR 17) ~ 2026.3+ (JBR 25)
+        sourceCompatibility = "17"
+        targetCompatibility = "17"
+        options.release.set(17)
         options.encoding = "UTF-8"
     }
 
     // 本地调试：启动带插件的沙箱 IDE
     runIde {
         jvmArgs("-Xmx2048m", "-Dfile.encoding=UTF-8")
+    }
+
+    named("publishPlugin") {
+        dependsOn("checkReleaseTag")
     }
 }

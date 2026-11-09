@@ -7,7 +7,7 @@
     <name>Syrobin Java Code Generate</name>
 
     <!-- 插件版本 -->
-    <version>2.2.0</version>
+    <version>3.0.0</version>
 
     <!-- 作者信息 -->
     <vendor
@@ -18,54 +18,47 @@
     <!-- 插件描述（Marketplace 规范：中英双语特性说明） -->
     <description><![CDATA[
         <p>
-            <b>Syrobin Java Code Generate</b> is a full-featured, intelligent Java backend code generator plugin for IntelliJ IDEA,
+            <b>Syrobin Java Code Generate</b> is a full-featured, intelligent Java backend &amp; full-stack code generator plugin for IntelliJ IDEA,
             designed to eliminate repetitive scaffolding work and accelerate microservice &amp; enterprise application development.
         </p>
         <p>
-            <b>Syrobin Java Code Generate</b> 是一款面向 IntelliJ IDEA 的全功能、智能化 Java 后端代码生成插件，旨在消除重复的脚手架编码工作，全面提速微服务与企业级应用研发。
+            <b>Syrobin Java Code Generate</b> 是一款面向 IntelliJ IDEA 的全功能、智能化 Java 后端与全栈代码生成插件，旨在消除重复的脚手架编码工作，全面提速微服务与企业级应用研发。
         </p>
 
         <h3>Key Features (English)</h3>
         <ul>
-            <li><b>11-Layer Full-Stack Generation:</b> One-click or modular generation of <code>Entity</code>, <code>BO</code>, <code>VO</code>, <code>Query</code>, <code>Enum</code>, <code>Mapper</code>, <code>Service</code>, <code>ServiceImpl</code>, <code>ServiceQuery</code>, <code>ServiceResults</code>, and <code>Controller</code>.</li>
-            <li><b>Multi-Dialect &amp; Offline DDL Engine:</b> Supports live metadata extraction from <b>MySQL, PostgreSQL, Oracle, and Dameng (DM8)</b>, one-click datasource auto-discovery from Spring <code>application.yml</code> / <code>properties</code>, and 100% <b>offline <code>CREATE TABLE</code> DDL SQL parsing</b>.</li>
-            <li><b>Smart Incremental Merge &amp; Diff Preview:</b> Preserves hand-written business methods and custom imports when table schemas evolve, with side-by-side IntelliJ <code>DiffManager</code> preview before writing.</li>
-            <li><b>Smart Annotation &amp; Enum Inference:</b> Automatically generates <b>Swagger 2 / SpringDoc OpenAPI 3</b> documentation annotations, <b>Bean Validation</b> constraints (<code>@NotBlank</code>, <code>@NotNull</code>, <code>@Size</code>, <code>@Email</code>, <code>@Pattern</code>, <code>@PositiveOrZero</code>) for both Spring Boot 2 (<code>javax.*</code>) and Spring Boot 3 (<code>jakarta.*</code>), and type-safe Enum classes from full/half-width column comments.</li>
-            <li><b>Built-in FreeMarker Template Center:</b> Customize, preview, reset, or export all 11 FreeMarker (<code>.ftl</code>) templates directly inside <code>Settings / Preferences -&gt; Tools -&gt; Syrobin Code Generate</code> with zero external middleware dependencies.</li>
+            <li><b>14-Template Full-Stack &amp; Multi-Module Generation:</b> One-click or modular generation of <code>Entity</code>, <code>BO</code>, <code>VO</code>, <code>Query</code>, <code>Enum</code>, <code>Mapper</code>, <code>Mapper.xml</code>, <code>MapStruct Converter</code>, <code>Service</code>, <code>ServiceImpl</code>, <code>ServiceQuery</code>, <code>ServiceResults</code>, <code>Controller</code>, and <code>Frontend TypeScript/Axios API</code> with per-layer Maven/Gradle sub-module routing and One-to-Many master-detail cascade generation.</li>
+            <li><b>Multi-Dialect &amp; Offline DDL AST Engine:</b> Supports live metadata extraction and dynamic Maven/Gradle JDBC driver loading for <b>MySQL, PostgreSQL, Oracle, and Dameng (DM8)</b>, plus 100% <b>offline DDL parsing</b> (including <code>COMMENT ON TABLE / COLUMN</code> and <code>ALTER TABLE ADD COLUMN</code>).</li>
+            <li><b>PSI AST Incremental Merge, Live Diff &amp; One-Click Rollback:</b> Preserves hand-written business methods and custom imports via IntelliJ <code>PsiJavaFile</code> AST merging and <code>CodeStyleManager</code> formatting, with double-click single-file or batch <code>DiffRequestChain</code> live preview and transactional <code>LocalHistory</code> batch rollback.</li>
+            <li><b>Team Contract, Sidebar ToolWindow &amp; Live Template Workbench:</b> Share project conventions via <code>.syrobin-codegen.json</code>, store credentials securely in OS keychain via <code>PasswordSafe</code>, access the resident <code>Syrobin CodeGen</code> sidebar ToolWindow, and edit all 14 FreeMarker templates with side-by-side real-time rendering preview in Settings.</li>
         </ul>
 
         <h3>核心特性（中文说明）</h3>
         <ul>
-            <li><b>11 层后端代码一键/按需生成：</b>支持多表批量生成或单层独立生成 <code>Entity</code>、<code>BO</code>、<code>VO</code>、<code>Query</code>、<code>Enum</code>、<code>Mapper</code>、<code>Service</code>、<code>ServiceImpl</code>、<code>ServiceQuery</code>、<code>ServiceResults</code> 与 <code>Controller</code>。</li>
-            <li><b>多数据库方言与离线 DDL 解析引擎：</b>原生适配 <b>MySQL、PostgreSQL、Oracle、达梦（DM8）</b>四大数据库元数据提取，支持一键扫描工程 <code>application.yml</code> / <code>properties</code> 自动识别数据源，并提供<b>离线 <code>CREATE TABLE</code> SQL 解析</b>与 <code>.sql</code> 文件右键直接生成能力。</li>
-            <li><b>智能增量代码合并与 Diff 预览：</b>表结构新增字段时，仅增量追加新增成员变量与缺失 <code>import</code>，100% 保留开发者手写的业务方法与自定义逻辑，并支持调起 IDEA 原生 <code>DiffManager</code> 左右分栏对比确认。</li>
-            <li><b>文档注解、校验注解与枚举智能推断：</b>支持一键切换 <b>Swagger 2 / SpringDoc OpenAPI 3</b> 注解风格，适配 <b>Spring Boot 2 (<code>javax.*</code>) / Spring Boot 3 (<code>jakarta.*</code>)</b> 自动推断 <code>@NotBlank</code>、<code>@NotNull</code>、<code>@Size</code>、<code>@Email</code>、<code>@Pattern</code>、<code>@PositiveOrZero</code> 校验注解，并兼容中英文全/半角括号注释自动生成枚举类。</li>
-            <li><b>内置 FreeMarker 模板配置中心：</b>内置 11 套开箱即用的默认模板与本地工作区持久化能力（零 Redis 依赖），支持在 <code>Settings / Preferences -&gt; Tools -&gt; Syrobin Code Generate</code> 中在线编辑、恢复默认或导出模板至工程 <code>/src/main/resources/templates/</code> 目录。</li>
+            <li><b>14 套模板全栈生成、主子表联表与多模块分层投递：</b>支持一键生成 <code>Entity</code>、<code>BO</code>、<code>VO</code>、<code>Query</code>、<code>Enum</code>、<code>Mapper</code>、<code>Mapper.xml</code>、<code>MapStruct Converter</code>、<code>Service</code>、<code>ServiceImpl</code>、<code>ServiceQuery</code>、<code>ServiceResults</code>、<code>Controller</code> 与前端 <code>TypeScript/Axios API</code>，支持跨 Maven/Gradle 子模块路由、表前缀剥离、<code>BaseEntity</code> 公共基类继承及主子表（One-to-Many）级联生成。</li>
+            <li><b>多方言动态驱动加载与全语法离线 DDL 引擎：</b>原生适配 <b>MySQL、PostgreSQL、Oracle、达梦（DM8）</b>，支持从本地 Maven/Gradle 仓库动态加载 JDBC 驱动，支持解析 PostgreSQL/Oracle 表外 <code>COMMENT ON TABLE/COLUMN</code> 及 <code>ALTER TABLE ADD COLUMN</code> 语句，并支持从 IDEA Database 面板右键直连生成。</li>
+            <li><b>PSI 语法树级智能合并、双击/批量 Diff 预演与一键回滚：</b>基于 IntelliJ <code>PsiJavaFile</code> 抽象语法树与 <code>CodeStyleManager</code> 精准合并新增字段、枚举项与缺失 <code>import</code>，支持单文件双击或整表批量 <code>DiffRequestChain</code> 预演，并集成 <code>LocalHistory</code> 支持一键回滚最近一次生成批次。</li>
+            <li><b>常驻侧边栏 ToolWindow、团队共享契约与实时模板沙箱工作台：</b>提供常驻右侧的 <code>Syrobin CodeGen</code> 工具窗口，支持导出 <code>.syrobin-codegen.json</code> 纳入 Git 团队共享，接入 <code>PasswordSafe</code> 钥匙串保护密码，并在 Settings 中提供左右分栏实时渲染的 FreeMarker 模板工作台。</li>
         </ul>
     ]]></description>
 
     <!-- 版本更新说明 -->
     <change-notes><![CDATA[
-        <h3>v2.2.0 - UI Refinement &amp; Generation Reliability (界面优化与生成可靠性修复)</h3>
+        <h3>v3.0.0 - Enterprise Architecture, PSI AST Engine, Master-Detail &amp; Live Workbench (3.0 企业级全栈架构升级)</h3>
         <ul>
-            <li>Refined table selection, file previews, Query empty states, and source/verification status (优化选表、文件预览、Query 空态及来源验证状态)。</li>
-            <li>Isolated per-table Query fields and conditions during batch generation (修复批量生成时不同表的 Query 规则串用)。</li>
-            <li>Rejected tables absent from offline DDL without JDBC fallback (离线模式拒绝未知表，禁止回退数据库)。</li>
-            <li>Invalidated metadata previews and stale requests after connection changes (连接变更后使旧元数据预览和过期请求失效)。</li>
-        </ul>
-
-        <h3>v2.1.0 - Full Architecture &amp; Intelligence Upgrade (全架构与智能化升级)</h3>
-        <ul>
-            <li><b>Brand &amp; Visual Upgrade (品牌与视觉升级):</b> Updated plugin ID (<code>com.syrobin.java.code.generate</code>), author metadata (<b>syrobin</b>), and custom vector icons for Light &amp; Dark themes.</li>
-            <li><b>P0 Baseline Governance (基线治理):</b> Non-blocking modeless wizard compatible with IntelliJ IDEA 2023.3 ~ 2026.1+ and JDK 21~25+, accurate <code>bigint -&gt; Long</code> mapping, UTF-8 file writing, and automatic VFS project tree refresh.</li>
-            <li><b>P1 Unified Wizard &amp; Zero External Dependencies (一体化向导与去外部依赖):</b> 4-tab <code>DialogWrapper</code> wizard, workspace-scoped <code>PersistentStateComponent</code> storage, 11 built-in FreeMarker fallback templates, and full/half-width enum comment parser.</li>
-            <li><b>P2 IDE Ecosystem Integration (IDE 生态深度集成):</b> Incremental Java field/import merger, native <code>DiffManager</code> side-by-side preview, Settings FreeMarker template center, multi-dialect support (MySQL / PostgreSQL / Oracle / DM8), and Spring <code>application.yml</code> datasource auto-scanner.</li>
-            <li><b>P3 Offline DDL &amp; Smart Validation (离线 DDL 与智能校验):</b> Offline <code>CREATE TABLE</code> SQL parser, right-click <code>.sql</code> file generator, and automatic Bean Validation annotation inference.</li>
+            <li><b>M1 - PSI AST Merge &amp; Multi-Module Routing (PSI 语法树合并与多模块路由):</b> Upgraded <code>IncrementalCodeMerger</code> to IntelliJ <code>PsiJavaFile</code> AST + <code>CodeStyleManager</code>, added double-click single-file and batch <code>DiffRequestChain</code> live preview, table prefix stripping (<code>t_</code>, <code>sys_</code>), <code>BaseEntity</code> inheritance, per-layer sub-module routing, <code>PasswordSafe</code> credential storage, and <code>.syrobin-codegen.json</code> team contract.</li>
+            <li><b>M2 - Multi-Tech-Stack Workbench &amp; Full-Dialect Engine (多技术栈实时工作台与全方言引擎):</b> Added <code>skl_mapper_xml.xml.ftl</code> and <code>skl_converter.java.ftl</code> (MapStruct), supported <code>BEAN_UTILS</code> / <code>MAPSTRUCT</code> / <code>HUTOOL</code> conversion strategies, upgraded Settings into a split-pane live FreeMarker sandbox workbench, supported PostgreSQL/Oracle <code>COMMENT ON TABLE/COLUMN</code> &amp; <code>ALTER TABLE ADD COLUMN</code> in offline DDL parser, added dynamic Maven/Gradle JDBC driver loading, and integrated IDEA Database ToolWindow popup menu.</li>
+            <li><b>M3 - Master-Detail Modeling, Frontend TS API, ToolWindow, LocalHistory Rollback &amp; i18n (主子表联表、前端 TS 生成、常驻侧边栏与一键回滚):</b> Added One-to-Many <code>SubTableRelation</code> cascade generation in <code>BO</code>/<code>VO</code>/<code>ServiceImpl</code>, added <code>skl_frontend_api.ts.ftl</code> for TypeScript interfaces and Axios API generation, registered resident <code>Syrobin CodeGen</code> ToolWindow, integrated <code>LocalHistoryHelper</code> for one-click batch rollback, and added <code>CodeGenBundle</code> bilingual internationalization.</li>
         </ul>
     ]]></change-notes>
 
     <!-- 平台依赖 -->
     <depends>com.intellij.modules.platform</depends>
+    <!-- 可选依赖：当宿主启用 Database Tools 插件时挂载 DatabaseViewPopupMenu 右键菜单 -->
+    <depends optional="true" config-file="syrobin-database-actions.xml">com.intellij.database</depends>
+
+    <!-- 国际化资源包 -->
+    <resource-bundle>messages.CodeGenBundle</resource-bundle>
 
     <!-- 扩展点 -->
     <extensions defaultExtensionNs="com.intellij">
@@ -82,12 +75,19 @@
                 instance="com.code.config.SklCodeGenConfigurable"
                 id="com.syrobin.java.code.generate.configurable"
                 displayName="Syrobin Code Generate"/>
+
+        <!-- 常驻侧边栏 ToolWindow 工作台（v3.0 建设矩阵域 5.1） -->
+        <toolWindow
+                id="Syrobin CodeGen"
+                anchor="right"
+                icon="/icons/pluginActionIcon.svg"
+                factoryClass="com.code.ui.SyrobinToolWindowFactory"/>
     </extensions>
 
     <!-- Action 定义 -->
     <actions>
 
-        <!-- 右键菜单主分组（带专属 16x16 矢量图标） -->
+        <!-- 右键菜单主分组（Project 视图主入口，Database 视图通过可选依赖 syrobin-database-actions.xml 挂载） -->
         <group
                 id="Syrobin.CodeGenerate.Group"
                 text="Syrobin Code Generate"
@@ -102,7 +102,14 @@
         <action id="Syrobin.CodeGenerate.CodeAllAction"
                 class="com.code.action.CodeAllAction"
                 text="Generate All Code"
-                description="Generate all 11 related backend code layers">
+                description="Generate all related backend code layers">
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
+        </action>
+
+        <action id="Syrobin.CodeGenerate.DatabaseToolWindowGenerateAction"
+                class="com.code.action.DatabaseToolWindowGenerateAction"
+                text="Generate Code from Selected Database Tables"
+                description="Generate code directly from selected tables in IDEA Database ToolWindow">
             <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
         </action>
 
@@ -160,6 +167,21 @@
                 text="Generate Controller"
                 description="Generate REST Controller layer">
             <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
+        </action>
+
+        <action id="Syrobin.CodeGenerate.FeignClientAction"
+                class="com.code.action.FeignClientAction"
+                text="Generate Feign Client"
+                description="Generate Spring Cloud OpenFeign Client interface">
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
+        </action>
+
+        <action id="Syrobin.CodeGenerate.ConvertToFeignClientAction"
+                class="com.code.action.ConvertToFeignClientAction"
+                text="Convert Interface / Controller to Feign Client"
+                description="Convert existing Controller or Service/API Java interface into Spring Cloud @FeignClient interface">
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
         </action>
 
         <action id="Syrobin.CodeGenerate.ServiceAction"

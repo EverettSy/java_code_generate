@@ -13,6 +13,9 @@ import java.io.Serializable;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Date;
+<#if subTableRelations?? && (subTableRelations?size > 0)>
+import java.util.List;
+</#if>
 <#if enumsList?? && (enumsList?size > 0)>
 import ${packageName}.entity.enums.*;
 </#if>
@@ -45,4 +48,18 @@ public class ${ClassName}VO implements Serializable {
 </#if>
     private ${column.dataType} ${column.columnName};
 </#list>
+<#if subTableRelations?? && (subTableRelations?size > 0)>
+<#list subTableRelations as rel>
+
+    /**
+     * ${rel.relationComment! (rel.subClassName + "子表集合")} (关联子表: ${rel.subTableName}.${rel.foreignKeyColumn})
+     */
+<#if docStyle?? && docStyle == "SWAGGER2">
+    @ApiModelProperty(value = "${rel.relationComment! (rel.subClassName + "子表集合")}")
+<#elseif docStyle?? && docStyle == "OPENAPI3">
+    @Schema(description = "${rel.relationComment! (rel.subClassName + "子表集合")}")
+</#if>
+    private List<${rel.subClassName}VO> ${rel.subClassVarName}List;
+</#list>
+</#if>
 }

@@ -6,6 +6,7 @@ import org.apache.commons.lang3.StringUtils;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 
 /**
  * 字段校验注解智能推断器（P3 阶段：根据数据库列约束与字段名语义自动生成 Bean Validation 注解）
@@ -30,7 +31,7 @@ public class ValidationAnnotationResolver {
             if (enableValidation) {
                 String label = extractCleanLabel(col.getColumnComment(), col.getColumnName());
                 String lowerName = StringUtils.defaultString(col.getColumnName()).toLowerCase(Locale.ROOT);
-                String javaType = StringUtils.defaultString(col.getDataType(), "String");
+                String javaType = Objects.toString(col.getDataType(), "String");
                 boolean isPrimaryOrAudit = Boolean.TRUE.equals(col.getPrimaryKey())
                         || lowerName.equals("id")
                         || lowerName.contains("create")

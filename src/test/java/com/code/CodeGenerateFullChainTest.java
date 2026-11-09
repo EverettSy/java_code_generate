@@ -2,6 +2,7 @@ package com.code;
 
 import com.code.action.*;
 import com.code.config.CodeGenSettingsState;
+import com.code.i18n.CodeGenBundle;
 import com.code.utils.*;
 import com.code.utils.entity.*;
 import org.junit.Assert;
@@ -16,7 +17,7 @@ import java.nio.file.Files;
 import java.util.*;
 
 /**
- * Skl Java Code Generate 全方位自动化测试套件（覆盖 P0 ~ P3 所有核心模块、边界条件与多模态模板渲染）
+ * Syrobin Java Code Generate 全方位自动化测试套件（覆盖 P0 ~ P3 及 v3.0 M1 + M2 + M3 + FeignClient 所有核心模块、边界条件与多模块路由）
  *
  * @author syrobin
  */
@@ -30,7 +31,6 @@ public class CodeGenerateFullChainTest {
      */
     @Test
     public void test01_P0DataTypesAndFileUtils() throws Exception {
-        // 整型与长整型边界（验证 bigint/int8/number -> Long 修复）
         Assert.assertEquals("Long", CodeGenerateUtils.sqlType2JavaType("bigint"));
         Assert.assertEquals("Long", CodeGenerateUtils.sqlType2JavaType("int8"));
         Assert.assertEquals("Long", CodeGenerateUtils.sqlType2JavaType("bigserial"));
@@ -44,19 +44,18 @@ public class CodeGenerateFullChainTest {
         Assert.assertEquals("Integer", CodeGenerateUtils.sqlType2JavaType("serial"));
         Assert.assertEquals("Short", CodeGenerateUtils.sqlType2JavaType("smallint"));
 
-        // 浮点与高精度金额类型
         Assert.assertEquals("Float", CodeGenerateUtils.sqlType2JavaType("float"));
         Assert.assertEquals("Float", CodeGenerateUtils.sqlType2JavaType("float4"));
         Assert.assertEquals("Double", CodeGenerateUtils.sqlType2JavaType("double"));
         Assert.assertEquals("Double", CodeGenerateUtils.sqlType2JavaType("float8"));
         Assert.assertEquals("Double", CodeGenerateUtils.sqlType2JavaType("binary_double"));
+        Assert.assertEquals("Double", CodeGenerateUtils.sqlType2JavaType("double precision"));
         Assert.assertEquals("BigDecimal", CodeGenerateUtils.sqlType2JavaType("decimal"));
         Assert.assertEquals("BigDecimal", CodeGenerateUtils.sqlType2JavaType("numeric"));
         Assert.assertEquals("BigDecimal", CodeGenerateUtils.sqlType2JavaType("real"));
         Assert.assertEquals("BigDecimal", CodeGenerateUtils.sqlType2JavaType("money"));
         Assert.assertEquals("BigDecimal", CodeGenerateUtils.sqlType2JavaType("smallmoney"));
 
-        // 布尔、日期时间、二进制与字符串类型（验证 image -> Blob 修复）
         Assert.assertEquals("Boolean", CodeGenerateUtils.sqlType2JavaType("bit"));
         Assert.assertEquals("Boolean", CodeGenerateUtils.sqlType2JavaType("bool"));
         Assert.assertEquals("Boolean", CodeGenerateUtils.sqlType2JavaType("boolean"));
@@ -69,6 +68,7 @@ public class CodeGenerateFullChainTest {
         Assert.assertEquals("byte[]", CodeGenerateUtils.sqlType2JavaType("bytea"));
         Assert.assertEquals("byte[]", CodeGenerateUtils.sqlType2JavaType("varbinary"));
         Assert.assertEquals("String", CodeGenerateUtils.sqlType2JavaType("varchar"));
+        Assert.assertEquals("String", CodeGenerateUtils.sqlType2JavaType("character varying"));
         Assert.assertEquals("String", CodeGenerateUtils.sqlType2JavaType("json"));
         Assert.assertEquals("String", CodeGenerateUtils.sqlType2JavaType("jsonb"));
         Assert.assertEquals("String", CodeGenerateUtils.sqlType2JavaType("text"));
@@ -76,17 +76,14 @@ public class CodeGenerateFullChainTest {
         Assert.assertEquals("String", CodeGenerateUtils.sqlType2JavaType(""));
         Assert.assertEquals("String", CodeGenerateUtils.sqlType2JavaType(null));
 
-        // 驼峰命名转换与空安全
         Assert.assertEquals("UserOrderRecord", CodeGenerateUtils.toUpper("user_order_record"));
         Assert.assertEquals("Id", CodeGenerateUtils.toUpper("id"));
         Assert.assertEquals("", CodeGenerateUtils.toUpper(""));
         Assert.assertEquals("", CodeGenerateUtils.toUpper(null));
 
-        // 24 小时制时间格式校验
         String now = CodeGenerateUtils.getDate();
         Assert.assertTrue(now.matches("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}"));
 
-        // UTF-8 文件写入与中文防乱码校验
         File utf8File = new File(tempFolder.newFolder("io_test"), "sub/Chinese注释Test.java");
         CodeGenerateUtils.writeFile("// 中文注释 UTF-8 测试：syrobin", utf8File.getAbsolutePath());
         Assert.assertTrue(utf8File.exists());
@@ -98,7 +95,6 @@ public class CodeGenerateFullChainTest {
      */
     @Test
     public void test02_P0JsonPropertiesAndRedisFallback() throws Exception {
-        // 1. JsonUtil 序列化与反序列化
         BeanQuery bq = new BeanQuery();
         bq.setName("startDate");
         bq.setFormat("LocalDateTime");
@@ -113,7 +109,6 @@ public class CodeGenerateFullChainTest {
         Assert.assertNull(JsonUtil.bean("", BeanQuery.class));
         Assert.assertNull(JsonUtil.list(null, BeanQuery.class));
 
-        // 2. PropertiesUtil UTF-8 独立实例加载验证
         File projRoot = tempFolder.newFolder("prop_proj");
         File cfgDir = new File(projRoot, "src/main/resources/templates/config");
         Assert.assertTrue(cfgDir.mkdirs());
@@ -124,10 +119,9 @@ public class CodeGenerateFullChainTest {
         Assert.assertEquals("test_db", mysqlProps.getProperty("database"));
         Assert.assertEquals("com.syrobin", mysqlProps.getProperty("packageName"));
 
-        // 3. RedisUtils 在未配置 redis.properties 时优雅返回 null 且不抛异常
-        Assert.assertNull(RedisUtils.getJedis(projRoot.getAbsolutePath() + "/"));
+        Assert.assertNull(RedisUtils.openSession(projRoot.getAbsolutePath() + "/"));
         Assert.assertNull(RedisUtils.hget(null, "beanQuery", "user_order"));
-        Assert.assertEquals(RedisUtils.JedisStatus.FAIL_LONG, RedisUtils.hset(null, "beanQuery", "user_order", "[]"));
+        Assert.assertEquals(RedisUtils.Status.FAIL_LONG, RedisUtils.hset(null, "beanQuery", "user_order", "[]"));
     }
 
     /**
@@ -135,7 +129,6 @@ public class CodeGenerateFullChainTest {
      */
     @Test
     public void test03_P1EnumCommentParserAllFormats() {
-        // 1. 全角括号 + 全角冒号 + 全角逗号 + 空白噪点
         List<EnumsEntityContent> fullWidth = EnumCommentParser.parseEnumItems("类型（0：首页，1：百万年薪，2：报价方案，  3  ：  工保百科）");
         Assert.assertEquals(4, fullWidth.size());
         Assert.assertEquals("0", fullWidth.get(0).getState());
@@ -143,38 +136,32 @@ public class CodeGenerateFullChainTest {
         Assert.assertEquals("3", fullWidth.get(3).getState());
         Assert.assertEquals("工保百科", fullWidth.get(3).getNote());
 
-        // 2. 半角括号 + 半角冒号 + 逗号/分号混用
         List<EnumsEntityContent> halfWidth = EnumCommentParser.parseEnumItems("订单状态(0:待支付, 1:已支付; 2:已取消)");
         Assert.assertEquals(3, halfWidth.size());
         Assert.assertEquals("2", halfWidth.get(2).getState());
         Assert.assertEquals("已取消", halfWidth.get(2).getNote());
 
-        // 3. 中括号 + 等号 + 顿号
         List<EnumsEntityContent> bracketStyle = EnumCommentParser.parseEnumItems("审核结果[10=通过、20=驳回]");
         Assert.assertEquals(2, bracketStyle.size());
 
-        // 4. 破折号分隔符
         List<EnumsEntityContent> dashStyle = EnumCommentParser.parseEnumItems("发货状态(1-待发货, 2-已发货)");
         Assert.assertEquals(2, dashStyle.size());
         Assert.assertEquals("已发货", dashStyle.get(1).getNote());
 
-        // 5. 多重括号干扰（前置普通括号说明 + 后置枚举括号）
         List<EnumsEntityContent> multiParens = EnumCommentParser.parseEnumItems("结算标识(内部财务专用)（0：未结算，1：已结算）");
         Assert.assertEquals(2, multiParens.size());
         Assert.assertEquals("未结算", multiParens.get(0).getNote());
 
-        // 6. 无枚举的普通注释与空值安全
         Assert.assertTrue(EnumCommentParser.parseEnumItems("普通备注字段(无键值对)").isEmpty());
         Assert.assertTrue(EnumCommentParser.parseEnumItems("").isEmpty());
         Assert.assertTrue(EnumCommentParser.parseEnumItems(null).isEmpty());
 
-        // 7. 格式化预览输出
         String preview = EnumCommentParser.formatPreview("order_status", halfWidth);
         Assert.assertEquals("order_status -> [0:待支付, 1:已支付, 2:已取消]", preview);
     }
 
     /**
-     * 测试场景 4（P1）：全部 13 个 Action 子类的目标模块预勾选契约验证
+     * 测试场景 4（P1）：全部 14 个 BaseAnAction 子类的目标模块预勾选契约验证
      */
     @Test
     public void test04_P1All13ActionsTargetConfiguration() throws Exception {
@@ -201,6 +188,7 @@ public class CodeGenerateFullChainTest {
         actionExpectedTargets.put(new EntityQueryAction(), new String[]{"entityQuery"});
         actionExpectedTargets.put(new EnumsAction(), new String[]{"enums"});
         actionExpectedTargets.put(new ControllerAction(), new String[]{"controller"});
+        actionExpectedTargets.put(new FeignClientAction(), new String[]{"feignClient"});
         actionExpectedTargets.put(new ServiceAction(), new String[]{"service"});
         actionExpectedTargets.put(new ServiceQueryAction(), new String[]{"serviceQuery"});
         actionExpectedTargets.put(new ServiceResultsAction(), new String[]{"serviceResults"});
@@ -294,7 +282,6 @@ public class CodeGenerateFullChainTest {
                 "    private LocalDateTime payTime;\n" +
                 "}\n";
 
-        // 1. 首次增量合并
         String mergedOnce = IncrementalCodeMerger.mergeJavaSource(existingJava, generatedV2);
         Assert.assertTrue(mergedOnce.contains("import java.math.BigDecimal;"));
         Assert.assertTrue(mergedOnce.contains("import java.time.LocalDateTime;"));
@@ -302,11 +289,9 @@ public class CodeGenerateFullChainTest {
         Assert.assertTrue(mergedOnce.contains("private LocalDateTime payTime;"));
         Assert.assertTrue(mergedOnce.contains("public boolean isValidId()"));
 
-        // 2. 二次幂等合并验证（同一份生成代码再次合并，不应产生任何重复字段或重复 import）
         String mergedTwice = IncrementalCodeMerger.mergeJavaSource(mergedOnce, generatedV2);
         Assert.assertEquals(mergedOnce, mergedTwice);
 
-        // 3. 文件级策略写入验证（INCREMENTAL_MERGE vs OVERWRITE）
         File targetFile = new File(tempFolder.newFolder("merge_test"), "UserOrder.java");
         IncrementalCodeMerger.writeWithStrategy(null, existingJava, targetFile.getAbsolutePath(),
                 IncrementalCodeMerger.WriteStrategy.INCREMENTAL_MERGE);
@@ -349,7 +334,6 @@ public class CodeGenerateFullChainTest {
 
         DdlSqlParser.ParsedTable orderTable = map.get("user_order");
         Assert.assertEquals("订单主表", orderTable.getTableComment());
-        // 确保 PRIMARY KEY / UNIQUE KEY / KEY 索引行未被误解析为字段
         Assert.assertEquals(4, orderTable.getColumns().size());
         Assert.assertTrue(orderTable.getColumns().get(0).getPrimaryKey());
         Assert.assertTrue(orderTable.getColumns().get(1).getPrimaryKey());
@@ -379,7 +363,6 @@ public class CodeGenerateFullChainTest {
 
         Map<String, DdlSqlParser.ParsedTable> parsedMap = DdlSqlParser.parseDdlScript(ddl);
 
-        // 构造覆盖全部 0~9 共 10 种类型的 ServiceQuery 列表
         List<ServiceQuery> allServiceQueries = new ArrayList<>();
         for (int t = 0; t <= 9; t++) {
             ServiceQuery sq = new ServiceQuery();
@@ -404,13 +387,12 @@ public class CodeGenerateFullChainTest {
             beanQueries.add(bq);
         }
 
-        // 1. 验证 OPENAPI3 + Spring Boot 3 (jakarta.validation) + fixedEnums 全链路生成
         File openApiProj = tempFolder.newFolder("openapi3_boot3_proj");
         Map<String, Object> params = buildFullEnableParams(parsedMap, beanQueries, allServiceQueries);
         params.put("docStyle", "OPENAPI3");
         params.put("bootVersion", "3");
         params.put("enableValidation", true);
-        params.put("fixedEnums", "order_status"); // 限定仅生成 order_status 的枚举类
+        params.put("fixedEnums", "order_status");
 
         CodeGenerate.foundCode(null, "user_order", "order", "syrobin", params, openApiProj.getAbsolutePath() + "/");
 
@@ -426,11 +408,9 @@ public class CodeGenerateFullChainTest {
         Assert.assertTrue(boContent.contains("@PositiveOrZero(message = \"订单金额不能为负数\")"));
         Assert.assertTrue(boContent.contains("@author syrobin"));
 
-        // 验证 fixedEnums 生效：仅生成了 UserOrderOrderStatusEnum.java，未生成 UserOrderAuditStatusEnum.java
         Assert.assertTrue(new File(baseDir + "entity/enums/UserOrderOrderStatusEnum.java").exists());
         Assert.assertFalse(new File(baseDir + "entity/enums/UserOrderAuditStatusEnum.java").exists());
 
-        // 验证 0~9 全部 10 种 ServiceQuery 在 UserOrderServiceQuery.java 中均正确渲染
         String sqContent = Files.readString(new File(baseDir + "service/query/UserOrderServiceQuery.java").toPath(), StandardCharsets.UTF_8);
         Assert.assertTrue(sqContent.contains("queryWrapper.eq("));
         Assert.assertTrue(sqContent.contains("queryWrapper.likeRight("));
@@ -442,7 +422,6 @@ public class CodeGenerateFullChainTest {
         Assert.assertTrue(sqContent.contains("queryWrapper.between("));
         Assert.assertTrue(sqContent.contains("queryWrapper.notBetween("));
 
-        // 2. 验证 SWAGGER2 + Spring Boot 2 (javax.validation) 全链路生成
         File swagger2Proj = tempFolder.newFolder("swagger2_boot2_proj");
         Map<String, Object> swaggerParams = buildFullEnableParams(parsedMap, beanQueries, allServiceQueries);
         swaggerParams.put("docStyle", "SWAGGER2");
@@ -456,9 +435,384 @@ public class CodeGenerateFullChainTest {
         Assert.assertTrue(swBoContent.contains("import javax.validation.constraints.*;"));
         Assert.assertTrue(swBoContent.contains("@ApiModelProperty(value = \"订单编号\")"));
 
-        // 未设置 fixedEnums 时，两个枚举字段均应生成枚举类
         Assert.assertTrue(new File(swBaseDir + "entity/enums/UserOrderOrderStatusEnum.java").exists());
         Assert.assertTrue(new File(swBaseDir + "entity/enums/UserOrderAuditStatusEnum.java").exists());
+    }
+
+    /**
+     * 测试场景 9（v3.0 M1）：表前缀剥离、BaseEntity 基类继承与公共列过滤、多模块分层路由、内存预渲染及团队规范契约 (.syrobin-codegen.json)
+     */
+    @Test
+    public void test09_V3M1TablePrefixBaseEntityMultiModuleAndTeamContract() throws Exception {
+        Assert.assertEquals("UserOrder", CodeGenerateUtils.toUpper("t_user_order", "t_,sys_,biz_"));
+        Assert.assertEquals("ArticleCategory", CodeGenerateUtils.toUpper("sys_article_category", "t_,sys_,biz_"));
+        Assert.assertEquals("TUserOrder", CodeGenerateUtils.toUpper("t_user_order", ""));
+        Assert.assertEquals("FinanceInvoice2", CodeGenerateUtils.toUpper("SYS_FINANCE_INVOICE2", "sys_"));
+        Assert.assertEquals("UserOrder", CodeGenerateUtils.toUpper("t_userOrder", "t_"));
+
+        String ddl =
+                "CREATE TABLE `t_user_order` (\n" +
+                "  `id` bigint NOT NULL PRIMARY KEY COMMENT '主键ID',\n" +
+                "  `order_no` varchar(64) NOT NULL COMMENT '订单编号',\n" +
+                "  `order_status` tinyint NOT NULL DEFAULT 0 COMMENT '状态（0：待支付，1：已支付）',\n" +
+                "  `create_date_time` datetime DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'\n" +
+                ") COMMENT='用户订单表';";
+
+        Map<String, DdlSqlParser.ParsedTable> parsedMap = DdlSqlParser.parseDdlScript(ddl);
+        File rootWorkspace = tempFolder.newFolder("multi_module_workspace");
+        File daoModule = new File(rootWorkspace, "order-dao");
+        File apiModule = new File(rootWorkspace, "order-api");
+        File webModule = new File(rootWorkspace, "order-web");
+        Assert.assertTrue(new File(daoModule, "src/main/java").mkdirs());
+        Assert.assertTrue(new File(apiModule, "src/main/java").mkdirs());
+        Assert.assertTrue(new File(webModule, "src/main/java").mkdirs());
+
+        Map<String, String> discovered = CodeGenerateUtils.discoverSubModules(null, daoModule.getAbsolutePath());
+        Assert.assertTrue(discovered.containsKey("order-dao"));
+        Assert.assertTrue(discovered.containsKey("order-api"));
+        Assert.assertTrue(discovered.containsKey("order-web"));
+
+        Map<String, Object> params = buildFullEnableParams(parsedMap, Collections.emptyList(), Collections.emptyList());
+        params.put("tablePrefixes", "t_,sys_");
+        params.put("baseEntityClass", "com.example.common.entity.BaseEntity");
+        params.put("ignoredBaseColumns", "id,create_date_time");
+
+        Map<String, String> routing = new LinkedHashMap<>();
+        routing.put("entity", daoModule.getAbsolutePath());
+        routing.put("mapper", daoModule.getAbsolutePath());
+        routing.put("entityBO", apiModule.getAbsolutePath());
+        routing.put("entityVO", apiModule.getAbsolutePath());
+        routing.put("controller", webModule.getAbsolutePath());
+        params.put("layerModuleRouting", routing);
+
+        Map<String, String> dryRunFiles = CodeGenerate.renderAllTargetFilesInMemory(
+                null, "t_user_order", "order", "syrobin", params, daoModule.getAbsolutePath() + "/", null
+        );
+        Assert.assertFalse(dryRunFiles.isEmpty());
+        Assert.assertFalse(new File(daoModule, "src/main/java/com/example/order/entity/UserOrder.java").exists());
+
+        CodeGenerate.foundCode(null, "t_user_order", "order", "syrobin", params, daoModule.getAbsolutePath() + "/");
+
+        File entityFile = new File(daoModule, "src/main/java/com/example/order/entity/UserOrder.java");
+        File boFile = new File(apiModule, "src/main/java/com/example/order/entity/bo/UserOrderBO.java");
+        File controllerFile = new File(webModule, "src/main/java/com/example/order/controller/UserOrderController.java");
+        Assert.assertTrue(entityFile.exists());
+        Assert.assertTrue(boFile.exists());
+        Assert.assertTrue(controllerFile.exists());
+
+        String entitySource = Files.readString(entityFile.toPath(), StandardCharsets.UTF_8);
+        Assert.assertTrue(entitySource.contains("import com.example.common.entity.BaseEntity;"));
+        Assert.assertTrue(entitySource.contains("public class UserOrder extends BaseEntity implements Serializable"));
+        Assert.assertTrue(entitySource.contains("@TableName(\"t_user_order\")"));
+        Assert.assertFalse(entitySource.contains("private Long id;"));
+        Assert.assertFalse(entitySource.contains("private LocalDateTime createDateTime;"));
+        Assert.assertTrue(entitySource.contains("private String orderNo;"));
+
+        String boSource = Files.readString(boFile.toPath(), StandardCharsets.UTF_8);
+        Assert.assertTrue(boSource.contains("private Long id;"));
+        Assert.assertTrue(boSource.contains("private String orderNo;"));
+
+        CodeGenSettingsState settings = new CodeGenSettingsState();
+        CodeGenSettingsState.ConfigState st = settings.getState();
+        Assert.assertNotNull(st);
+        st.packageName = "com.syrobin.cloud";
+        st.tablePrefixes = "t_,sys_";
+        st.baseEntityClass = "com.syrobin.common.BaseEntity";
+        st.storeCredential("top_secret_db_password");
+
+        File contractFile = settings.exportTeamContract(rootWorkspace.getAbsolutePath());
+        Assert.assertTrue(contractFile.exists());
+        String contractJson = Files.readString(contractFile.toPath(), StandardCharsets.UTF_8);
+        Assert.assertTrue(contractJson.contains("com.syrobin.cloud"));
+        Assert.assertFalse(contractJson.contains("top_secret_db_password"));
+
+        CodeGenSettingsState restoredSettings = new CodeGenSettingsState();
+        Assert.assertTrue(restoredSettings.importTeamContract(rootWorkspace.getAbsolutePath()));
+        Assert.assertEquals("com.syrobin.cloud", restoredSettings.getState().packageName);
+        Assert.assertEquals("t_,sys_", restoredSettings.getState().tablePrefixes);
+        Assert.assertEquals("com.syrobin.common.BaseEntity", restoredSettings.getState().baseEntityClass);
+    }
+
+    /**
+     * 测试场景 10（v3.0 M2）：PostgreSQL/Oracle 表外 COMMENT ON + ALTER TABLE ADD COLUMN 解析、
+     * Mapper.xml + MapStruct Converter 生成、15 套模板实时沙箱预览、动态驱动发现与 Database 面板节点提取
+     */
+    @Test
+    public void test10_V3M2PostgresOracleDdlMapperXmlMapStructAndLivePreview() throws Exception {
+        String pgOracleDdl =
+                "CREATE TABLE \"PUBLIC\".\"FINANCE_INVOICE\" (\n" +
+                "  \"ID\" NUMBER(19) NOT NULL PRIMARY KEY,\n" +
+                "  \"INVOICE_CODE\" VARCHAR2(64 BYTE) NOT NULL,\n" +
+                "  \"TOTAL_AMOUNT\" NUMBER(12, 2) NOT NULL,\n" +
+                "  \"RETRY_COUNT\" NUMBER(4) DEFAULT 0,\n" +
+                "  \"IS_VERIFIED\" NUMBER(1) DEFAULT 0\n" +
+                ");\n" +
+                "ALTER TABLE \"PUBLIC\".\"FINANCE_INVOICE\" ADD COLUMN \"INVOICE_STATUS\" SMALLINT NOT NULL;\n" +
+                "COMMENT ON TABLE \"PUBLIC\".\"FINANCE_INVOICE\" IS '财务发票主表';\n" +
+                "COMMENT ON COLUMN \"PUBLIC\".\"FINANCE_INVOICE\".\"INVOICE_CODE\" IS '发票代码';\n" +
+                "COMMENT ON COLUMN \"PUBLIC\".\"FINANCE_INVOICE\".\"TOTAL_AMOUNT\" IS '发票总金额';\n" +
+                "COMMENT ON COLUMN \"PUBLIC\".\"FINANCE_INVOICE\".\"INVOICE_STATUS\" IS '发票状态（0：待开具，1：已开具，2：已作废）';\n";
+
+        Map<String, DdlSqlParser.ParsedTable> parsedMap = DdlSqlParser.parseDdlScript(pgOracleDdl);
+        Assert.assertEquals(1, parsedMap.size());
+        DdlSqlParser.ParsedTable invoiceTable = parsedMap.get("FINANCE_INVOICE");
+        Assert.assertNotNull(invoiceTable);
+        Assert.assertEquals("财务发票主表", invoiceTable.getTableComment());
+        Assert.assertEquals(6, invoiceTable.getColumns().size());
+
+        Assert.assertEquals("Long", invoiceTable.getColumns().get(0).getDataType());
+        Assert.assertEquals("String", invoiceTable.getColumns().get(1).getDataType());
+        Assert.assertEquals("发票代码", invoiceTable.getColumns().get(1).getColumnComment());
+        Assert.assertEquals("BigDecimal", invoiceTable.getColumns().get(2).getDataType());
+        Assert.assertEquals("Integer", invoiceTable.getColumns().get(3).getDataType());
+        Assert.assertEquals("Boolean", invoiceTable.getColumns().get(4).getDataType());
+        Assert.assertEquals("Short", invoiceTable.getColumns().get(5).getDataType());
+        Assert.assertEquals("发票状态（0：待开具，1：已开具，2：已作废）", invoiceTable.getColumns().get(5).getColumnComment());
+
+        File m2Proj = tempFolder.newFolder("m2_mapstruct_proj");
+        Map<String, Object> params = buildFullEnableParams(parsedMap, Collections.emptyList(), Collections.emptyList());
+        params.put("mapperXml", "y");
+        params.put("converter", "y");
+        params.put("mapperStrategy", "MAPSTRUCT");
+
+        CodeGenerate.foundCode(null, "FINANCE_INVOICE", "finance", "syrobin", params, m2Proj.getAbsolutePath() + "/");
+
+        File mapperXmlFile = new File(m2Proj, "src/main/resources/mapper/FinanceInvoiceMapper.xml");
+        File converterFile = new File(m2Proj, "src/main/java/com/example/finance/entity/converter/FinanceInvoiceConverter.java");
+        File serviceImplFile = new File(m2Proj, "src/main/java/com/example/finance/service/impl/FinanceInvoiceServiceImpl.java");
+        File serviceResultsFile = new File(m2Proj, "src/main/java/com/example/finance/service/results/FinanceInvoiceServiceResults.java");
+
+        Assert.assertTrue(mapperXmlFile.exists());
+        Assert.assertTrue(converterFile.exists());
+        Assert.assertTrue(serviceImplFile.exists());
+        Assert.assertTrue(serviceResultsFile.exists());
+
+        String xmlContent = Files.readString(mapperXmlFile.toPath(), StandardCharsets.UTF_8);
+        Assert.assertTrue("生成的 Mapper XML 命名空间不匹配：\n" + xmlContent,
+                xmlContent.contains("<mapper namespace=\"com.example.finance.mapper.FinanceInvoiceMapper\">"));
+        Assert.assertTrue(xmlContent.contains("<id column=\"ID\" property=\"id\" />"));
+        Assert.assertTrue(xmlContent.contains("<result column=\"TOTAL_AMOUNT\" property=\"totalAmount\" />"));
+
+        String converterContent = Files.readString(converterFile.toPath(), StandardCharsets.UTF_8);
+        Assert.assertTrue(converterContent.contains("@Mapper(componentModel = \"spring\""));
+        Assert.assertTrue(converterContent.contains("FinanceInvoice boToEntity(FinanceInvoiceBO bo);"));
+
+        String serviceImplContent = Files.readString(serviceImplFile.toPath(), StandardCharsets.UTF_8);
+        Assert.assertTrue(serviceImplContent.contains("FinanceInvoiceConverter.INSTANCE.boToEntity("));
+        Assert.assertTrue(serviceImplContent.contains("FinanceInvoiceConverter.INSTANCE.queryToEntity("));
+
+        String resultsContent = Files.readString(serviceResultsFile.toPath(), StandardCharsets.UTF_8);
+        Assert.assertTrue(resultsContent.contains("FinanceInvoiceConverter.INSTANCE.entityToVO("));
+        Assert.assertTrue(resultsContent.contains("FinanceInvoiceConverter.INSTANCE.entityListToVOList("));
+
+        Assert.assertEquals(15, CodeGenSettingsState.TEMPLATE_NAMES.length);
+        for (String tplName : CodeGenSettingsState.TEMPLATE_NAMES) {
+            String tplContent = CodeGenSettingsState.loadBuiltInTemplate(tplName);
+            Assert.assertFalse("内置模板不应为空: " + tplName, tplContent.isBlank());
+            String rendered = CodeGenerate.renderSamplePreview(
+                    tplName, tplContent, "3", "OPENAPI3", "MAPSTRUCT", true, "com.example.common.BaseEntity"
+            );
+            Assert.assertFalse("模板实时沙箱渲染不应为空: " + tplName, rendered.isBlank());
+        }
+
+        File fakeRepo = tempFolder.newFolder("fake_m2_repo");
+        File pgDir = new File(fakeRepo, "org/postgresql/postgresql/42.7.3");
+        Assert.assertTrue(pgDir.mkdirs());
+        File fakePgJar = new File(pgDir, "postgresql-42.7.3.jar");
+        Assert.assertTrue(fakePgJar.createNewFile());
+        File discoveredJar = DatabaseDialect.POSTGRESQL.findDriverJarInLocalRepositories(fakeRepo);
+        Assert.assertNotNull(discoveredJar);
+        Assert.assertEquals("postgresql-42.7.3.jar", discoveredJar.getName());
+
+        Object mockDbTable = new MockDasTable("orders");
+        List<String> extractedTables = DatabaseToolWindowGenerateAction.extractTableNamesFromObjects(new Object[]{mockDbTable});
+        Assert.assertEquals(Collections.singletonList("orders"), extractedTables);
+    }
+
+    /**
+     * 测试场景 11（v3.0 M3）：主子表 One-to-Many 级联生成、前端 TypeScript/Axios API 生成、LocalHistory 一键事务回滚与 CodeGenBundle 中英双语国际化
+     */
+    @Test
+    public void test11_V3M3MasterDetailSubTableFrontendTsLocalHistoryAndI18n() throws Exception {
+        String ddl =
+                "CREATE TABLE `user_order` (\n" +
+                "  `id` bigint NOT NULL PRIMARY KEY COMMENT '主键ID',\n" +
+                "  `order_no` varchar(64) NOT NULL COMMENT '订单编号',\n" +
+                "  `order_amount` decimal(12,2) NOT NULL COMMENT '订单金额'\n" +
+                ") COMMENT='用户订单表';\n" +
+                "CREATE TABLE `user_order_item` (\n" +
+                "  `id` bigint NOT NULL PRIMARY KEY COMMENT '明细ID',\n" +
+                "  `order_id` bigint NOT NULL COMMENT '关联主订单ID',\n" +
+                "  `sku_name` varchar(128) NOT NULL COMMENT '商品名称'\n" +
+                ") COMMENT='用户订单明细表';";
+
+        Map<String, DdlSqlParser.ParsedTable> parsedMap = DdlSqlParser.parseDdlScript(ddl);
+        File m3Proj = tempFolder.newFolder("m3_master_detail_proj");
+
+        // 预先写入一个会被增量合并修改的已有 Entity 文件，以同时验证「恢复已存在文件 + 删除新增文件」的双重回滚语义
+        File preExistingEntity = new File(m3Proj, "src/main/java/com/example/order/entity/UserOrder.java");
+        String originalHandWrittenEntity =
+                "package com.example.order.entity;\n\n" +
+                "public class UserOrder {\n" +
+                "    private Long id;\n" +
+                "    public String customHandWrittenMethod() { return \"keep_me\"; }\n" +
+                "}\n";
+        CodeGenerateUtils.writeFile(originalHandWrittenEntity, preExistingEntity.getAbsolutePath());
+
+        Map<String, Object> params = buildFullEnableParams(parsedMap, Collections.emptyList(), Collections.emptyList());
+        params.put("frontendApi", "y");
+        params.put("docStyle", "OPENAPI3");
+        params.put("subTableRelations", Collections.singletonList(
+                new SubTableRelation("user_order_item", "order_id", "id", "订单商品明细集合")
+        ));
+
+        LocalHistoryHelper.clearHistory(null);
+        LocalHistoryHelper.startGenerationBatch(null, "user_order");
+        CodeGenerate.foundCode(null, "user_order", "order", "syrobin", params, m3Proj.getAbsolutePath() + "/");
+        LocalHistoryHelper.finishGenerationBatch(null);
+
+        // 1. 验证 BO / VO / ServiceImpl 中的主子表 One-to-Many 级联代码
+        File boFile = new File(m3Proj, "src/main/java/com/example/order/entity/bo/UserOrderBO.java");
+        File voFile = new File(m3Proj, "src/main/java/com/example/order/entity/vo/UserOrderVO.java");
+        File serviceImplFile = new File(m3Proj, "src/main/java/com/example/order/service/impl/UserOrderServiceImpl.java");
+        File tsApiFile = new File(m3Proj, "src/main/resources/frontend/userOrder.api.ts");
+
+        Assert.assertTrue(boFile.exists());
+        Assert.assertTrue(voFile.exists());
+        Assert.assertTrue(serviceImplFile.exists());
+        Assert.assertTrue(tsApiFile.exists());
+
+        String boSource = Files.readString(boFile.toPath(), StandardCharsets.UTF_8);
+        Assert.assertTrue(boSource.contains("private List<UserOrderItemBO> userOrderItemList;"));
+
+        String voSource = Files.readString(voFile.toPath(), StandardCharsets.UTF_8);
+        Assert.assertTrue(voSource.contains("private List<UserOrderItemVO> userOrderItemList;"));
+
+        String serviceImplSource = Files.readString(serviceImplFile.toPath(), StandardCharsets.UTF_8);
+        Assert.assertTrue(serviceImplSource.contains("private UserOrderItemService userOrderItemService;"));
+        Assert.assertTrue(serviceImplSource.contains("subItem.setOrderId(userOrder.getId());"));
+        Assert.assertTrue(serviceImplSource.contains("userOrderItemService.saveEnhance(subItem);"));
+
+        // 2. 验证前端 TypeScript Interface & Axios API 代码与 Controller 路径对齐
+        String tsSource = Files.readString(tsApiFile.toPath(), StandardCharsets.UTF_8);
+        Assert.assertTrue(tsSource.contains("export interface UserOrderVO"));
+        Assert.assertTrue(tsSource.contains("export interface UserOrderBO"));
+        Assert.assertTrue(tsSource.contains("export interface UserOrderQuery"));
+        Assert.assertTrue(tsSource.contains("const BASE_PATH = '/userOrder';"));
+        Assert.assertTrue(tsSource.contains("export function selectUserOrderPage("));
+        Assert.assertTrue(tsSource.contains("export function saveUserOrder("));
+
+        // 3. 验证已有文件已被增量合并（新增了 orderNo 字段）
+        String mergedEntity = Files.readString(preExistingEntity.toPath(), StandardCharsets.UTF_8);
+        Assert.assertTrue(mergedEntity.contains("private String orderNo;"));
+        Assert.assertTrue(mergedEntity.contains("customHandWrittenMethod()"));
+
+        // 4. 验证 LocalHistoryHelper 一键事务级回滚：已存在文件恢复至生成前原文，本次新增文件全部清理
+        Assert.assertTrue(LocalHistoryHelper.hasRollbackableBatch(null));
+        int rolledBackCount = LocalHistoryHelper.rollbackLastBatch(null);
+        Assert.assertTrue(rolledBackCount >= 10);
+        Assert.assertFalse(LocalHistoryHelper.hasRollbackableBatch(null));
+
+        Assert.assertTrue(preExistingEntity.exists());
+        Assert.assertEquals(originalHandWrittenEntity, Files.readString(preExistingEntity.toPath(), StandardCharsets.UTF_8));
+        Assert.assertFalse("回滚后新增的 BO 文件应被删除", boFile.exists());
+        Assert.assertFalse("回滚后新增的 TS API 文件应被删除", tsApiFile.exists());
+
+        // 5. 验证 CodeGenBundle 中英双语国际化解析
+        Assert.assertEquals("开始生成", CodeGenBundle.message(Locale.SIMPLIFIED_CHINESE, "dialog.ok.button"));
+        Assert.assertEquals("Start Generate", CodeGenBundle.message(Locale.US, "dialog.ok.button"));
+        Assert.assertTrue(CodeGenBundle.message(Locale.SIMPLIFIED_CHINESE, "rollback.success.message", 11, "user_order")
+                .contains("已成功回滚批次 [user_order] 中的 11 个生成文件"));
+        Assert.assertTrue(CodeGenBundle.message(Locale.US, "rollback.success.message", 11, "user_order")
+                .contains("Successfully rolled back 11 files from batch [user_order]"));
+    }
+
+    /**
+     * 测试场景 12（v3.0 FeignClient 专项验证）：
+     * 1. 通过 skl_feign_client.java.ftl 模板直接生成 OpenFeign 客户端接口（支持自定义 feignServiceName 与多模块路由）
+     * 2. 通过 FeignClientConverter 将已有 Controller 类或 Service 接口直接转换为标准 @FeignClient 接口
+     */
+    @Test
+    public void test12_V3FeignClientGenerationAndControllerInterfaceConversion() throws Exception {
+        String ddl =
+                "CREATE TABLE `user_order` (\n" +
+                "  `id` bigint NOT NULL PRIMARY KEY COMMENT '主键ID',\n" +
+                "  `order_no` varchar(64) NOT NULL COMMENT '订单编号'\n" +
+                ") COMMENT='用户订单表';";
+
+        Map<String, DdlSqlParser.ParsedTable> parsedMap = DdlSqlParser.parseDdlScript(ddl);
+        File feignProj = tempFolder.newFolder("feign_client_proj");
+
+        Map<String, Object> params = buildFullEnableParams(parsedMap, Collections.emptyList(), Collections.emptyList());
+        params.put("feignClient", "y");
+        params.put("feignServiceName", "mall-order-service");
+        params.put("docStyle", "OPENAPI3");
+
+        CodeGenerate.foundCode(null, "user_order", "order", "syrobin", params, feignProj.getAbsolutePath() + "/");
+
+        File feignFile = new File(feignProj, "src/main/java/com/example/order/feign/UserOrderFeignClient.java");
+        File controllerFile = new File(feignProj, "src/main/java/com/example/order/controller/UserOrderController.java");
+        File serviceFile = new File(feignProj, "src/main/java/com/example/order/service/UserOrderService.java");
+        Assert.assertTrue("应生成 UserOrderFeignClient.java", feignFile.exists());
+        Assert.assertTrue(controllerFile.exists());
+        Assert.assertTrue(serviceFile.exists());
+
+        String feignSource = Files.readString(feignFile.toPath(), StandardCharsets.UTF_8);
+        Assert.assertTrue(feignSource.contains("package com.example.order.feign;"));
+        Assert.assertTrue(feignSource.contains("import org.springframework.cloud.openfeign.FeignClient;"));
+        Assert.assertTrue(feignSource.contains("import org.springframework.cloud.openfeign.SpringQueryMap;"));
+        Assert.assertTrue(feignSource.contains("name = \"mall-order-service\""));
+        Assert.assertTrue(feignSource.contains("contextId = \"userOrderFeignClient\""));
+        Assert.assertTrue(feignSource.contains("path = \"/userOrder\""));
+        Assert.assertTrue(feignSource.contains("Page<UserOrderVO> select(@SpringQueryMap UserOrderQuery userOrderQuery"));
+        Assert.assertTrue(feignSource.contains("@RequestParam(value = \"current\", required = false) Integer current"));
+        Assert.assertTrue(feignSource.contains("String save(@Validated @RequestBody UserOrderBO userOrderBO);"));
+
+        // 2. 验证将已有的 Controller.java 转换为 FeignClient 接口
+        String controllerSource = Files.readString(controllerFile.toPath(), StandardCharsets.UTF_8);
+        String convertedFromController = FeignClientConverter.convertToFeignClientSource(
+                controllerSource, "trade-order-center", null
+        );
+        Assert.assertTrue(convertedFromController.contains("package com.example.order.feign;"));
+        Assert.assertTrue(convertedFromController.contains("name = \"trade-order-center\""));
+        Assert.assertTrue(convertedFromController.contains("public interface UserOrderFeignClient"));
+        Assert.assertTrue(convertedFromController.contains("Page<UserOrderVO> select(@SpringQueryMap UserOrderQuery userOrderQuery, @RequestParam(value = \"current\", required = false) Integer current, @RequestParam(value = \"size\", required = false) Integer size);"));
+        Assert.assertTrue(convertedFromController.contains("String save(@Validated @RequestBody UserOrderBO userOrderBO);"));
+        Assert.assertFalse("转换后的 Feign 接口不应残留 Service 属性或方法体", convertedFromController.contains("userOrderService."));
+
+        // 3. 验证将无 Web 注解的普通 Service 接口转换为 FeignClient 接口（自动补齐 @GetMapping/@PostMapping/@PutMapping/@DeleteMapping 与 Page 参数展开）
+        String serviceSource = Files.readString(serviceFile.toPath(), StandardCharsets.UTF_8);
+        String convertedFromService = FeignClientConverter.convertToFeignClientSource(
+                serviceSource, null, null
+        );
+        Assert.assertTrue(convertedFromService.contains("package com.example.order.feign;"));
+        Assert.assertTrue(convertedFromService.contains("name = \"order-service\""));
+        Assert.assertTrue(convertedFromService.contains("@GetMapping(\"/pageEnhance\")"));
+        Assert.assertTrue(convertedFromService.contains("Page<UserOrderVO> pageEnhance(@RequestParam(value = \"current\", required = false) Integer current, @RequestParam(value = \"size\", required = false) Integer size, @SpringQueryMap UserOrderQuery userOrderQuery);"));
+        Assert.assertTrue(convertedFromService.contains("@PostMapping(\"/saveEnhance\")"));
+        Assert.assertTrue(convertedFromService.contains("String saveEnhance(@RequestBody UserOrderBO userOrderBO);"));
+        Assert.assertTrue(convertedFromService.contains("@PutMapping(\"/updateEnhance\")"));
+        Assert.assertTrue(convertedFromService.contains("@DeleteMapping(\"/removeEnhance\")"));
+
+        File resolvedTarget = FeignClientConverter.resolveTargetFeignFile(controllerFile);
+        Assert.assertEquals("UserOrderFeignClient.java", resolvedTarget.getName());
+        Assert.assertEquals("feign", resolvedTarget.getParentFile().getName());
+    }
+
+    public static class MockDasTable {
+        private final String name;
+
+        public MockDasTable(String name) {
+            this.name = name;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public String getKind() {
+            return "TABLE";
+        }
     }
 
     private Map<String, Object> buildFullEnableParams(Map<String, DdlSqlParser.ParsedTable> parsedMap,

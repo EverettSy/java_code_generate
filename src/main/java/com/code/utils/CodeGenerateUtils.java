@@ -16,11 +16,9 @@ import java.text.SimpleDateFormat;
 import java.util.*;
 
 /**
- * Created with IntelliJ IDEA.
- * User:    syrobin
- * Date:    2016/2/1
- * Time:    17:55
- * details: 代码生成工具类（P2：支持 MySQL/PostgreSQL/Oracle/DM8 多数据库方言与 Spring 配置识别）
+ * 代码生成工具类（v3.0 M2：支持表名前缀自动剥离、多模块微服务子工程自动发现与 MySQL/PG/Oracle/DM8 多方言类型映射）
+ *
+ * @author syrobin
  */
 public class CodeGenerateUtils {
 
@@ -92,7 +90,7 @@ public class CodeGenerateUtils {
         try {
             String url = conn.getMetaData().getURL();
             return DatabaseDialect.fromJdbcUrl(url);
-        } catch ( Exception e) {
+        } catch (Exception e) {
             return DatabaseDialect.MYSQL;
         }
     }
@@ -133,7 +131,47 @@ public class CodeGenerateUtils {
             DatabaseDialect.fromJdbcUrl(st.jdbcUrl).loadDriver();
             return DriverManager.getConnection(st.jdbcUrl, st.username, st.retrieveCredential());
         }
-        throw new IllegalStateException("未配置数据库连接，请在生成弹窗「3. 数据源设置」中填写连接信息。");
+        throw new IllegalStateException("未配置数据库连接，请在生成弹窗「数据源连接」中填写连接信息。");
+    }
+
+    /**
+     * 剥离表名前缀（支持逗号或分号分隔的多个前缀，如 "t_,sys_,biz_"）
+     */
+    public static String stripTablePrefix(String tableName, @Nullable String prefixesCsv) {
+        if (StringUtils.isBlank(tableName)) {
+            return "";
+        }
+        String cleanName = tableName.trim();
+        if (StringUtils.isBlank(prefixesCsv)) {
+            return cleanName;
+        }
+        String[] prefixes = prefixesCsv.split("[,;\\s]+");
+        for (String rawPrefix : prefixes) {
+            String prefix = rawPrefix.trim();
+            if (StringUtils.isNotBlank(prefix)
+                    && cleanName.length() > prefix.length()
+                    && cleanName.regionMatches(true, 0, prefix, 0, prefix.length())) {
+                String stripped = cleanName.substring(prefix.length());
+                while (stripped.startsWith("_")) {
+                    stripped = stripped.substring(1);
+                }
+                if (StringUtils.isNotBlank(stripped)) {
+                    return stripped;
+                }
+            }
+        }
+        return cleanName;
+    }
+
+    /**
+     * 带表名前缀剥离的大驼峰类名转换
+     */
+    public static String toUpper(String str, @Nullable String prefixesCsv) {
+        String tableName = stripTablePrefix(str, prefixesCsv);
+        if (tableName.equals(tableName.toUpperCase(Locale.ROOT))) {
+            tableName = tableName.toLowerCase(Locale.ROOT);
+        }
+        return toUpper(tableName);
     }
 
     /**
@@ -149,6 +187,62 @@ public class CodeGenerateUtils {
             name.append(StringUtils.capitalize(part));
         }
         return name.toString();
+    }
+
+    /**
+     * 自动扫描工程根目录及父级目录下的多模块（Maven/Gradle Sub-Modules）列表
+     * 返回模块名称 -> 模块绝对路径（末尾带 "/"）
+     */
+    public static Map<String, String> discoverSubModules(@Nullable Project project, @Nullable String currentModuleRootPath) {
+        Map<String, String> modules = new LinkedHashMap<>();
+        Set<File> candidateRoots = new LinkedHashSet<>();
+
+        if (project != null && StringUtils.isNotBlank(project.getBasePath())) {
+            candidateRoots.add(new File(project.getBasePath()));
+        }
+        if (StringUtils.isNotBlank(currentModuleRootPath)) {
+            File currentDir = new File(currentModuleRootPath);
+            if (currentDir.exists()) {
+                candidateRoots.add(currentDir);
+                if (currentDir.getParentFile() != null) {
+                    candidateRoots.add(currentDir.getParentFile());
+                }
+            }
+        }
+
+        for (File root : candidateRoots) {
+            if (!root.exists() || !root.isDirectory()) {
+                continue;
+            }
+            if (isJavaModuleDir(root)) {
+                modules.put(root.getName(), normalizeDirPath(root.getAbsolutePath()));
+            }
+            File[] children = root.listFiles(File::isDirectory);
+            if (children != null) {
+                Arrays.sort(children, Comparator.comparing(File::getName));
+                for (File child : children) {
+                    if (!child.getName().startsWith(".") && isJavaModuleDir(child)) {
+                        modules.put(child.getName(), normalizeDirPath(child.getAbsolutePath()));
+                    }
+                }
+            }
+        }
+        return modules;
+    }
+
+    private static boolean isJavaModuleDir(File dir) {
+        return new File(dir, "src/main/java").exists()
+                || new File(dir, "pom.xml").exists()
+                || new File(dir, "build.gradle").exists()
+                || new File(dir, "build.gradle.kts").exists();
+    }
+
+    public static String normalizeDirPath(String path) {
+        if (StringUtils.isBlank(path)) {
+            return "";
+        }
+        String norm = path.replace('\\', '/');
+        return norm.endsWith("/") ? norm : norm + "/";
     }
 
     /**
@@ -170,13 +264,14 @@ public class CodeGenerateUtils {
             return "Long";
         } else if (t.equals("float") || t.equals("float4")) {
             return "Float";
-        } else if (t.equals("double") || t.equals("float8") || t.equals("binary_double")) {
+        } else if (t.equals("double") || t.equals("float8") || t.equals("binary_double") || t.equals("double precision")) {
             return "Double";
         } else if (t.equals("decimal") || t.equals("numeric")
                 || t.equals("real") || t.equals("money")
                 || t.equals("smallmoney")) {
             return "BigDecimal";
         } else if (t.contains("varchar") || t.contains("char")
+                || t.contains("varying") || t.contains("nvarchar")
                 || t.contains("text") || t.contains("clob")
                 || t.equals("json") || t.equals("jsonb") || t.equals("variant")) {
             return "String";

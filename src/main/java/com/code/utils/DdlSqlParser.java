@@ -8,7 +8,17 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 离线 DDL SQL 解析引擎（P3 阶段：无需连接真实数据库，直接从 CREATE TABLE 语句解析表结构与字段元数据，兼容 JDK 21~25+）
+ * 离线 DDL SQL 多方言解析引擎（v3.0 M2：支持 MySQL / PostgreSQL / Oracle / 达梦 DM8）
+ *
+ * 核心能力：
+ * 1. 支持 MySQL 行内 COMMENT 与表尾 COMMENT='...'
+ * 2. 支持 PostgreSQL / Oracle / DM8 表外独立注释语句：
+ *    - COMMENT ON TABLE [schema.]table_name IS '...'
+ *    - COMMENT ON COLUMN [schema.]table_name.column_name IS '...'
+ * 3. 支持 ALTER TABLE [schema.]table_name ADD [COLUMN] ... 增量字段语句合并
+ * 4. 支持 VARCHAR2(64 BYTE/CHAR)、NUMBER(p,s) 精度区分（含小数位自动映射 BigDecimal）、CHARACTER VARYING 等多方言类型
+ *
+ * @author syrobin
  */
 public class DdlSqlParser {
 
@@ -43,27 +53,53 @@ public class DdlSqlParser {
     }
 
     private static final Pattern CREATE_TABLE_HEADER_PATTERN = Pattern.compile(
-            "(?i)CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(?:[`\"\\[]?\\w+[`\"\\]]?\\.)?[`\"\\[]?([a-zA-Z0-9_]+)[`\"\\]]?\\s*\\("
+            "(?i)CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(?:[`\"\\[]?\\w+[`\"\\]]?\\s*\\.\\s*)?[`\"\\[]?([a-zA-Z0-9_]+)[`\"\\]]?\\s*\\("
     );
 
     private static final Pattern TABLE_COMMENT_PATTERN = Pattern.compile(
-            "(?i)COMMENT\\s*=\\s*'([^']*)'|COMMENT\\s+'([^']*)'"
+            "(?i)COMMENT\\s*=\\s*'((?:''|\\\\'|[^'])*)'|COMMENT\\s+'((?:''|\\\\'|[^'])*)'"
     );
 
     private static final Pattern PRIMARY_KEY_CONSTRAINT_PATTERN = Pattern.compile(
             "(?i)PRIMARY\\s+KEY\\s*\\(([^)]+)\\)"
     );
 
+    /**
+     * 匹配字段定义行：支持 `character varying(64)`、`varchar2(64 byte)`、`number(12, 2)`、`timestamp with time zone` 等多方言语法
+     */
     private static final Pattern COLUMN_LINE_PATTERN = Pattern.compile(
-            "^\\s*[`\"\\[]?([a-zA-Z0-9_]+)[`\"\\]]?\\s+([a-zA-Z0-9_]+)(?:\\s*\\(\\s*(\\d+)(?:\\s*,\\s*\\d+)?\\s*\\))?(.*)$"
+            "(?i)^\\s*[`\"\\[]?([a-zA-Z0-9_]+)[`\"\\]]?\\s+" +
+            "(character\\s+varying|double\\s+precision|timestamp(?:\\s+with(?:out)?\\s+time\\s+zone)?|[a-zA-Z0-9_]+)" +
+            "(?:\\s*\\(\\s*(\\d+)(?:\\s*,\\s*(\\d+))?(?:\\s*(?:BYTE|CHAR))?\\s*\\))?(.*)$"
     );
 
     private static final Pattern COLUMN_COMMENT_PATTERN = Pattern.compile(
-            "(?i)COMMENT\\s+'([^']*)'"
+            "(?i)COMMENT\\s+'((?:''|\\\\'|[^'])*)'"
     );
 
     /**
-     * 解析包含一个或多个 CREATE TABLE 的 SQL 文本，返回表名到 ParsedTable 的映射
+     * PostgreSQL / Oracle / DM8 表外注释：COMMENT ON TABLE [schema.]table IS '...'
+     */
+    private static final Pattern COMMENT_ON_TABLE_PATTERN = Pattern.compile(
+            "(?i)COMMENT\\s+ON\\s+TABLE\\s+(?:[`\"\\[]?\\w+[`\"\\]]?\\s*\\.\\s*)?[`\"\\[]?([a-zA-Z0-9_]+)[`\"\\]]?\\s+IS\\s+'((?:''|\\\\'|[^'])*)'"
+    );
+
+    /**
+     * PostgreSQL / Oracle / DM8 字段表外注释：COMMENT ON COLUMN [schema.]table.column IS '...'
+     */
+    private static final Pattern COMMENT_ON_COLUMN_PATTERN = Pattern.compile(
+            "(?i)COMMENT\\s+ON\\s+COLUMN\\s+(?:[`\"\\[]?\\w+[`\"\\]]?\\s*\\.\\s*)?[`\"\\[]?([a-zA-Z0-9_]+)[`\"\\]]?\\s*\\.\\s*[`\"\\[]?([a-zA-Z0-9_]+)[`\"\\]]?\\s+IS\\s+'((?:''|\\\\'|[^'])*)'"
+    );
+
+    /**
+     * ALTER TABLE [schema.]table ADD [COLUMN] ... 增量加列语句
+     */
+    private static final Pattern ALTER_TABLE_ADD_COLUMN_PATTERN = Pattern.compile(
+            "(?i)ALTER\\s+TABLE\\s+(?:[`\"\\[]?\\w+[`\"\\]]?\\s*\\.\\s*)?[`\"\\[]?([a-zA-Z0-9_]+)[`\"\\]]?\\s+ADD\\s+(?:COLUMN\\s+)?([^;]+)"
+    );
+
+    /**
+     * 解析包含一个或多个 CREATE TABLE / ALTER TABLE / COMMENT ON 的 SQL 文本，返回表名到 ParsedTable 的映射
      */
     public static Map<String, ParsedTable> parseDdlScript(String sqlScript) {
         Map<String, ParsedTable> result = new LinkedHashMap<>();
@@ -71,9 +107,10 @@ public class DdlSqlParser {
             return result;
         }
 
+        // 1. 解析所有 CREATE TABLE 主体
         Matcher headerMatcher = CREATE_TABLE_HEADER_PATTERN.matcher(sqlScript);
         while (headerMatcher.find()) {
-            String tableName = headerMatcher.group(1).trim();
+            String rawTableName = headerMatcher.group(1).trim();
             int openParenIndex = headerMatcher.end() - 1;
             int closeParenIndex = findMatchingCloseParen(sqlScript, openParenIndex);
             if (closeParenIndex < 0) {
@@ -85,13 +122,87 @@ public class DdlSqlParser {
             String tailOptions = sqlScript.substring(closeParenIndex + 1, statementEnd);
 
             ParsedTable parsedTable = new ParsedTable();
-            parsedTable.setTableName(tableName);
+            parsedTable.setTableName(rawTableName);
             parsedTable.setTableComment(extractTableComment(tailOptions));
             parsedTable.setColumns(parseColumnsFromBody(bodyContent));
 
-            result.put(tableName, parsedTable);
+            result.put(rawTableName, parsedTable);
         }
+
+        if (result.isEmpty()) {
+            return result;
+        }
+
+        // 2. 解析 ALTER TABLE ... ADD [COLUMN] 增量列语句
+        Matcher alterMatcher = ALTER_TABLE_ADD_COLUMN_PATTERN.matcher(sqlScript);
+        while (alterMatcher.find()) {
+            String targetTable = alterMatcher.group(1).trim();
+            String addBody = alterMatcher.group(2).trim();
+            ParsedTable parsedTable = findTableIgnoreCase(result, targetTable);
+            if (parsedTable == null) {
+                continue;
+            }
+            if (addBody.startsWith("(") && addBody.endsWith(")")) {
+                addBody = addBody.substring(1, addBody.length() - 1);
+            }
+            List<Table> addedCols = parseColumnsFromBody(addBody);
+            for (Table added : addedCols) {
+                mergeOrAddColumn(parsedTable.getColumns(), added);
+            }
+        }
+
+        // 3. 回填 PostgreSQL / Oracle / DM8 的 COMMENT ON TABLE 语句
+        Matcher tableCommentMatcher = COMMENT_ON_TABLE_PATTERN.matcher(sqlScript);
+        while (tableCommentMatcher.find()) {
+            String targetTable = tableCommentMatcher.group(1).trim();
+            String comment = unescapeSqlString(tableCommentMatcher.group(2));
+            ParsedTable parsedTable = findTableIgnoreCase(result, targetTable);
+            if (parsedTable != null && StringUtils.isNotBlank(comment)) {
+                parsedTable.setTableComment(comment);
+            }
+        }
+
+        // 4. 回填 PostgreSQL / Oracle / DM8 的 COMMENT ON COLUMN 语句
+        Matcher colCommentMatcher = COMMENT_ON_COLUMN_PATTERN.matcher(sqlScript);
+        while (colCommentMatcher.find()) {
+            String targetTable = colCommentMatcher.group(1).trim();
+            String targetCol = colCommentMatcher.group(2).trim();
+            String comment = unescapeSqlString(colCommentMatcher.group(3));
+            ParsedTable parsedTable = findTableIgnoreCase(result, targetTable);
+            if (parsedTable != null) {
+                for (Table col : parsedTable.getColumns()) {
+                    if (col.getTypeName().equalsIgnoreCase(targetCol)) {
+                        col.setColumnComment(comment);
+                        break;
+                    }
+                }
+            }
+        }
+
         return result;
+    }
+
+    private static void mergeOrAddColumn(List<Table> existingCols, Table newCol) {
+        for (int i = 0; i < existingCols.size(); i++) {
+            if (existingCols.get(i).getTypeName().equalsIgnoreCase(newCol.getTypeName())) {
+                existingCols.set(i, newCol);
+                return;
+            }
+        }
+        existingCols.add(newCol);
+    }
+
+    private static ParsedTable findTableIgnoreCase(Map<String, ParsedTable> map, String tableName) {
+        ParsedTable direct = map.get(tableName);
+        if (direct != null) {
+            return direct;
+        }
+        for (Map.Entry<String, ParsedTable> entry : map.entrySet()) {
+            if (entry.getKey().equalsIgnoreCase(tableName)) {
+                return entry.getValue();
+            }
+        }
+        return null;
     }
 
     private static List<Table> parseColumnsFromBody(String bodyContent) {
@@ -101,7 +212,7 @@ public class DdlSqlParser {
         List<String> lines = splitTopLevelCommaLines(bodyContent);
 
         for (String rawLine : lines) {
-            String trimmed = rawLine.trim();
+            String trimmed = stripLeadingLineComments(rawLine).trim();
             Matcher pkMatcher = PRIMARY_KEY_CONSTRAINT_PATTERN.matcher(trimmed);
             if (pkMatcher.find() && isConstraintLine(trimmed)) {
                 String pkCols = pkMatcher.group(1);
@@ -115,7 +226,7 @@ public class DdlSqlParser {
         }
 
         for (String rawLine : lines) {
-            String trimmed = rawLine.trim();
+            String trimmed = stripLeadingLineComments(rawLine).trim();
             if (StringUtils.isBlank(trimmed) || isConstraintLine(trimmed)) {
                 continue;
             }
@@ -127,19 +238,20 @@ public class DdlSqlParser {
 
             String rawColName = colMatcher.group(1).trim();
             String rawSqlType = colMatcher.group(2).trim();
-            String lengthStr = colMatcher.group(3);
-            String modifiers = StringUtils.defaultString(colMatcher.group(4));
+            String precisionOrLenStr = colMatcher.group(3);
+            String scaleStr = colMatcher.group(4);
+            String modifiers = StringUtils.defaultString(colMatcher.group(5));
 
             Table tableCol = new Table();
             tableCol.setTypeName(rawColName);
             String camelLower = StringUtils.uncapitalize(CodeGenerateUtils.toUpper(rawColName.toLowerCase(Locale.ROOT)));
             tableCol.setColumnName(camelLower);
             tableCol.setColumnNameUpper(StringUtils.capitalize(camelLower));
-            tableCol.setDataType(CodeGenerateUtils.sqlType2JavaType(rawSqlType));
+            tableCol.setDataType(resolveSqlTypeWithScale(rawSqlType, precisionOrLenStr, scaleStr));
 
-            if (StringUtils.isNotBlank(lengthStr)) {
+            if (StringUtils.isNotBlank(precisionOrLenStr)) {
                 try {
-                    tableCol.setMaxLength(Integer.parseInt(lengthStr));
+                    tableCol.setMaxLength(Integer.parseInt(precisionOrLenStr));
                 } catch (NumberFormatException ignored) {
                 }
             }
@@ -152,7 +264,7 @@ public class DdlSqlParser {
 
             Matcher commentMatcher = COLUMN_COMMENT_PATTERN.matcher(modifiers);
             if (commentMatcher.find()) {
-                tableCol.setColumnComment(commentMatcher.group(1).trim());
+                tableCol.setColumnComment(unescapeSqlString(commentMatcher.group(1)));
             } else {
                 tableCol.setColumnComment("");
             }
@@ -161,6 +273,64 @@ public class DdlSqlParser {
         }
 
         return columns;
+    }
+
+    /**
+     * 结合精度与小数位数映射 Java 类型（例如 Oracle NUMBER(12,2) -> BigDecimal，NUMBER(9) -> Integer，NUMBER(19) -> Long）
+     */
+    private static String resolveSqlTypeWithScale(String rawSqlType, String precisionStr, String scaleStr) {
+        String normType = rawSqlType.trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", " ");
+        if ("number".equals(normType)) {
+            if (StringUtils.isNotBlank(scaleStr)) {
+                try {
+                    int scale = Integer.parseInt(scaleStr);
+                    if (scale > 0) {
+                        return "BigDecimal";
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+            if (StringUtils.isNotBlank(precisionStr)) {
+                try {
+                    int precision = Integer.parseInt(precisionStr);
+                    if (precision == 1) {
+                        return "Boolean";
+                    } else if (precision <= 9) {
+                        return "Integer";
+                    } else {
+                        return "Long";
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+            return "Long";
+        }
+        return CodeGenerateUtils.sqlType2JavaType(normType);
+    }
+
+    private static String stripLeadingLineComments(String text) {
+        if (StringUtils.isBlank(text)) {
+            return "";
+        }
+        String[] lines = text.split("\\r?\\n");
+        StringBuilder sb = new StringBuilder();
+        for (String line : lines) {
+            String t = line.trim();
+            if (!t.startsWith("--") && !t.startsWith("//")) {
+                if (sb.length() > 0) {
+                    sb.append(" ");
+                }
+                sb.append(line);
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String unescapeSqlString(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        return raw.replace("''", "'").replace("\\'", "'").trim();
     }
 
     private static boolean isConstraintLine(String trimmedLine) {
@@ -182,7 +352,8 @@ public class DdlSqlParser {
         }
         Matcher m = TABLE_COMMENT_PATTERN.matcher(tailOptions);
         if (m.find()) {
-            return StringUtils.defaultIfBlank(m.group(1), StringUtils.defaultString(m.group(2))).trim();
+            String raw = StringUtils.defaultIfBlank(m.group(1), StringUtils.defaultString(m.group(2)));
+            return unescapeSqlString(raw);
         }
         return "";
     }

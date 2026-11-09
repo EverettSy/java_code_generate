@@ -38,4 +38,16 @@ public class MyNotifier {
                         .notify(project)
         );
     }
+
+    /**
+     * 警告通知
+     */
+    public static void notifyWarning(@Nullable Project project, String content) {
+        ApplicationManager.getApplication().invokeLater(() ->
+                NotificationGroupManager.getInstance()
+                        .getNotificationGroup(GROUP_ID)
+                        .createNotification(content, NotificationType.WARNING)
+                        .notify(project)
+        );
+    }
 }

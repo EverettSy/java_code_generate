@@ -8,14 +8,26 @@ import ${packageName}.entity.${ClassName};
 import ${packageName}.entity.bo.${ClassName}BO;
 import ${packageName}.entity.query.${ClassName}Query;
 import ${packageName}.entity.vo.${ClassName}VO;
+<#if mapperStrategy?? && mapperStrategy == "MAPSTRUCT">
+import ${packageName}.entity.converter.${ClassName}Converter;
+<#elseif mapperStrategy?? && mapperStrategy == "HUTOOL">
+import cn.hutool.core.convert.Convert;
+<#else>
+import org.springframework.beans.BeanUtils;
+</#if>
 import ${packageName}.mapper.${ClassName}Mapper;
 import ${packageName}.service.${ClassName}Service;
+<#if subTableRelations?? && (subTableRelations?size > 0)>
+<#list subTableRelations as rel>
+import ${packageName}.entity.bo.${rel.subClassName}BO;
+import ${packageName}.service.${rel.subClassName}Service;
+</#list>
+</#if>
 import ${packageName}.service.query.${ClassName}ServiceQuery;
 import ${packageName}.service.results.${ClassName}ServiceResults;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
-import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
@@ -38,11 +50,22 @@ public class ${ClassName}ServiceImpl extends ServiceImpl<${ClassName}Mapper, ${C
     private ${ClassName}Mapper ${className}Mapper;
     private ${ClassName}ServiceResults ${className}ServiceResults;
     private ${ClassName}ServiceQuery ${className}ServiceQuery;
+<#if subTableRelations?? && (subTableRelations?size > 0)>
+<#list subTableRelations as rel>
+    private ${rel.subClassName}Service ${rel.subClassVarName}Service;
+</#list>
+</#if>
 
     @Override
     public List<${ClassName}VO> listEnhance(${ClassName}Query ${className}Query) {
+<#if mapperStrategy?? && mapperStrategy == "MAPSTRUCT">
+        ${ClassName} ${className} = ${ClassName}Converter.INSTANCE.queryToEntity(${className}Query);
+<#elseif mapperStrategy?? && mapperStrategy == "HUTOOL">
+        ${ClassName} ${className} = Convert.convert(${ClassName}.class, ${className}Query);
+<#else>
         ${ClassName} ${className} = new ${ClassName}();
         BeanUtils.copyProperties(${className}Query, ${className});
+</#if>
         QueryWrapper<${ClassName}> queryWrapper = new QueryWrapper<>(${className});
         query(${className}Query, queryWrapper);
         return ${className}ServiceResults.assignment(list(queryWrapper));
@@ -50,8 +73,14 @@ public class ${ClassName}ServiceImpl extends ServiceImpl<${ClassName}Mapper, ${C
 
     @Override
     public Page<${ClassName}VO> pageEnhance(Page page, ${ClassName}Query ${className}Query) {
+<#if mapperStrategy?? && mapperStrategy == "MAPSTRUCT">
+        ${ClassName} ${className} = ${ClassName}Converter.INSTANCE.queryToEntity(${className}Query);
+<#elseif mapperStrategy?? && mapperStrategy == "HUTOOL">
+        ${ClassName} ${className} = Convert.convert(${ClassName}.class, ${className}Query);
+<#else>
         ${ClassName} ${className} = new ${ClassName}();
         BeanUtils.copyProperties(${className}Query, ${className});
+</#if>
         QueryWrapper<${ClassName}> queryWrapper = new QueryWrapper<>(${className});
         query(${className}Query, queryWrapper);
         return ${className}ServiceResults.assignment(page(page, queryWrapper));
@@ -59,8 +88,14 @@ public class ${ClassName}ServiceImpl extends ServiceImpl<${ClassName}Mapper, ${C
 
     @Override
     public ${ClassName}VO getOneEnhance(${ClassName}Query ${className}Query) {
+<#if mapperStrategy?? && mapperStrategy == "MAPSTRUCT">
+        ${ClassName} ${className} = ${ClassName}Converter.INSTANCE.queryToEntity(${className}Query);
+<#elseif mapperStrategy?? && mapperStrategy == "HUTOOL">
+        ${ClassName} ${className} = Convert.convert(${ClassName}.class, ${className}Query);
+<#else>
         ${ClassName} ${className} = new ${ClassName}();
         BeanUtils.copyProperties(${className}Query, ${className});
+</#if>
         QueryWrapper<${ClassName}> queryWrapper = new QueryWrapper<>(${className});
         query(${className}Query, queryWrapper);
         return ${className}ServiceResults.assignment(getOne(queryWrapper));
@@ -68,8 +103,14 @@ public class ${ClassName}ServiceImpl extends ServiceImpl<${ClassName}Mapper, ${C
 
     @Override
     public Long countEnhance(${ClassName}Query ${className}Query) {
+<#if mapperStrategy?? && mapperStrategy == "MAPSTRUCT">
+        ${ClassName} ${className} = ${ClassName}Converter.INSTANCE.queryToEntity(${className}Query);
+<#elseif mapperStrategy?? && mapperStrategy == "HUTOOL">
+        ${ClassName} ${className} = Convert.convert(${ClassName}.class, ${className}Query);
+<#else>
         ${ClassName} ${className} = new ${ClassName}();
         BeanUtils.copyProperties(${className}Query, ${className});
+</#if>
         QueryWrapper<${ClassName}> queryWrapper = new QueryWrapper<>(${className});
         query(${className}Query, queryWrapper);
         return count(queryWrapper);
@@ -78,17 +119,39 @@ public class ${ClassName}ServiceImpl extends ServiceImpl<${ClassName}Mapper, ${C
     @Override
     @Transactional(propagation = Propagation.REQUIRED, isolation = Isolation.DEFAULT, timeout = 36000, rollbackFor = Exception.class)
     public String saveEnhance(${ClassName}BO ${className}BO) {
+<#if mapperStrategy?? && mapperStrategy == "MAPSTRUCT">
+        ${ClassName} ${className} = ${ClassName}Converter.INSTANCE.boToEntity(${className}BO);
+<#elseif mapperStrategy?? && mapperStrategy == "HUTOOL">
+        ${ClassName} ${className} = Convert.convert(${ClassName}.class, ${className}BO);
+<#else>
         ${ClassName} ${className} = new ${ClassName}();
         BeanUtils.copyProperties(${className}BO, ${className});
+</#if>
         save(${className});
+<#if subTableRelations?? && (subTableRelations?size > 0)>
+<#list subTableRelations as rel>
+        if (${className}BO.get${rel.subClassName}List() != null && !${className}BO.get${rel.subClassName}List().isEmpty()) {
+            for (${rel.subClassName}BO subItem : ${className}BO.get${rel.subClassName}List()) {
+                subItem.set${rel.foreignKeyPropertyUpper}(${className}.get${rel.masterKeyPropertyUpper}());
+                ${rel.subClassVarName}Service.saveEnhance(subItem);
+            }
+        }
+</#list>
+</#if>
         return "";
     }
 
     @Override
     @Transactional(propagation = Propagation.REQUIRED, isolation = Isolation.DEFAULT, timeout = 36000, rollbackFor = Exception.class)
     public Boolean updateEnhance(${ClassName}BO ${className}BO) {
+<#if mapperStrategy?? && mapperStrategy == "MAPSTRUCT">
+        ${ClassName} ${className} = ${ClassName}Converter.INSTANCE.boToEntity(${className}BO);
+<#elseif mapperStrategy?? && mapperStrategy == "HUTOOL">
+        ${ClassName} ${className} = Convert.convert(${ClassName}.class, ${className}BO);
+<#else>
         ${ClassName} ${className} = new ${ClassName}();
         BeanUtils.copyProperties(${className}BO, ${className});
+</#if>
         UpdateWrapper<${ClassName}> updateWrapper = new UpdateWrapper<>();
         return update(${className}, updateWrapper);
     }
@@ -96,8 +159,14 @@ public class ${ClassName}ServiceImpl extends ServiceImpl<${ClassName}Mapper, ${C
     @Override
     @Transactional(propagation = Propagation.REQUIRED, isolation = Isolation.DEFAULT, timeout = 36000, rollbackFor = Exception.class)
     public Boolean removeEnhance(${ClassName}BO ${className}BO) {
+<#if mapperStrategy?? && mapperStrategy == "MAPSTRUCT">
+        ${ClassName} ${className} = ${ClassName}Converter.INSTANCE.boToEntity(${className}BO);
+<#elseif mapperStrategy?? && mapperStrategy == "HUTOOL">
+        ${ClassName} ${className} = Convert.convert(${ClassName}.class, ${className}BO);
+<#else>
         ${ClassName} ${className} = new ${ClassName}();
         BeanUtils.copyProperties(${className}BO, ${className});
+</#if>
         QueryWrapper<${ClassName}> queryWrapper = new QueryWrapper<>(${className});
         return remove(queryWrapper);
     }

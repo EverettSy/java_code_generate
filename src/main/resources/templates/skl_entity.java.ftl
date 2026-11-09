@@ -1,6 +1,9 @@
 package ${packageName}.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
+<#if baseEntityClass?? && (baseEntityClass?length > 0) && baseEntityClass?contains(".")>
+import ${baseEntityClass};
+</#if>
 <#if docStyle?? && docStyle == "SWAGGER2">
 import io.swagger.annotations.ApiModel;
 import io.swagger.annotations.ApiModelProperty;
@@ -26,7 +29,7 @@ import ${packageName}.entity.enums.*;
  * @since ${date}
  */
 @Data
-@EqualsAndHashCode(callSuper = false)
+@EqualsAndHashCode(callSuper = <#if baseEntitySimpleName?? && (baseEntitySimpleName?length > 0)>true<#else>false</#if>)
 @Accessors(chain = true)
 @TableName("${tableName}")
 <#if docStyle?? && docStyle == "SWAGGER2">
@@ -34,10 +37,10 @@ import ${packageName}.entity.enums.*;
 <#elseif docStyle?? && docStyle == "OPENAPI3">
 @Schema(name = "${ClassName}", description = "${functionName}")
 </#if>
-public class ${ClassName} implements Serializable {
+public class ${ClassName}<#if baseEntitySimpleName?? && (baseEntitySimpleName?length > 0)> extends ${baseEntitySimpleName}</#if> implements Serializable {
 
     private static final long serialVersionUID = 1L;
-<#list list as column>
+<#list (entityColumns!list) as column>
 
     /**
      * ${column.columnComment!}

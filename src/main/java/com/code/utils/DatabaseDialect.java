@@ -2,30 +2,46 @@ package com.code.utils;
 
 import com.code.utils.entity.Table;
 import org.apache.commons.lang3.StringUtils;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.File;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.sql.*;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 多数据库方言元数据适配器与 Spring 配置文件数据源扫描器（P2 + P3：提取字段非空、最大长度与主键约束）
+ * 多数据库方言元数据适配器、动态 JDBC 驱动加载器与 Spring 配置文件扫描器（v3.0 M2）
+ *
+ * 核心升级：
+ * 1. 支持从本地 Maven 仓库 (~/.m2/repository) 与 Gradle 缓存 (~/.gradle/caches) 动态发现并加载
+ *    PostgreSQL、Oracle、达梦 (DM8) 的 JDBC 驱动 JAR，无需将所有商业/第三方驱动硬打包进插件。
+ * 2. 通过 DriverShim 桥接 URLClassLoader 加载的 Driver，无缝兼容 DriverManager。
+ *
+ * @author syrobin
  */
 public enum DatabaseDialect {
-    MYSQL("com.mysql.cj.jdbc.Driver", "com.mysql.jdbc.Driver"),
-    POSTGRESQL("org.postgresql.Driver", "org.postgresql.Driver"),
-    ORACLE("oracle.jdbc.OracleDriver", "oracle.jdbc.driver.OracleDriver"),
-    DM("dm.jdbc.driver.DmDriver", "dm.jdbc.driver.DmDriver");
+    MYSQL("com.mysql.cj.jdbc.Driver", "com.mysql.jdbc.Driver", "mysql-connector"),
+    POSTGRESQL("org.postgresql.Driver", "org.postgresql.Driver", "postgresql-"),
+    ORACLE("oracle.jdbc.OracleDriver", "oracle.jdbc.driver.OracleDriver", "ojdbc"),
+    DM("dm.jdbc.driver.DmDriver", "dm.jdbc.driver.DmDriver", "DmJdbcDriver");
+
+    private static final Map<DatabaseDialect, Driver> DYNAMIC_DRIVER_CACHE = new ConcurrentHashMap<>();
 
     private final String primaryDriver;
     private final String fallbackDriver;
+    private final String jarPrefixHint;
 
-    DatabaseDialect(String primaryDriver, String fallbackDriver) {
+    DatabaseDialect(String primaryDriver, String fallbackDriver, String jarPrefixHint) {
         this.primaryDriver = primaryDriver;
         this.fallbackDriver = fallbackDriver;
+        this.jarPrefixHint = jarPrefixHint;
     }
 
     public static DatabaseDialect fromJdbcUrl(String jdbcUrl) {
@@ -43,11 +59,169 @@ public enum DatabaseDialect {
         return MYSQL;
     }
 
+    /**
+     * 加载数据库驱动：优先从插件自身 ClassLoader 加载；若未内置则自动扫描本地 Maven / Gradle 仓库动态加载
+     */
     public void loadDriver() throws ClassNotFoundException {
         try {
             Class.forName(primaryDriver);
-        } catch (ClassNotFoundException e) {
+            return;
+        } catch (ClassNotFoundException ignored) {
+        }
+        try {
             Class.forName(fallbackDriver);
+            return;
+        } catch (ClassNotFoundException ignored) {
+        }
+
+        if (DYNAMIC_DRIVER_CACHE.containsKey(this)) {
+            return;
+        }
+
+        File jarFile = findDriverJarInLocalRepositories();
+        if (jarFile != null && jarFile.exists()) {
+            try {
+                loadDriverFromJar(jarFile);
+                return;
+            } catch (Exception ignored) {
+            }
+        }
+        throw new ClassNotFoundException(
+                "未找到 " + name() + " 数据库驱动 [" + primaryDriver + "]。请确保本地 Maven (~/.m2) 或 Gradle (~/.gradle) 仓库中已下载对应驱动 JAR。"
+        );
+    }
+
+    /**
+     * 从指定驱动 JAR 文件动态加载并注册 JDBC Driver
+     */
+    public synchronized Driver loadDriverFromJar(File jarFile) throws Exception {
+        URL jarUrl = jarFile.toURI().toURL();
+        URLClassLoader loader = new URLClassLoader(new URL[]{jarUrl}, DatabaseDialect.class.getClassLoader());
+        Class<?> driverClass;
+        try {
+            driverClass = Class.forName(primaryDriver, true, loader);
+        } catch (ClassNotFoundException ex) {
+            driverClass = Class.forName(fallbackDriver, true, loader);
+        }
+        Driver rawDriver = (Driver) driverClass.getDeclaredConstructor().newInstance();
+        Driver shim = new DriverShim(rawDriver);
+        DriverManager.registerDriver(shim);
+        DYNAMIC_DRIVER_CACHE.put(this, shim);
+        return shim;
+    }
+
+    /**
+     * 在本地 Maven (~/.m2/repository) 或 Gradle 缓存目录中搜索当前方言对应的 JDBC 驱动 JAR
+     */
+    @Nullable
+    public File findDriverJarInLocalRepositories(File... customSearchRoots) {
+        List<File> roots = new ArrayList<>();
+        if (customSearchRoots != null) {
+            for (File r : customSearchRoots) {
+                if (r != null && r.exists()) {
+                    roots.add(r);
+                }
+            }
+        }
+        String userHome = System.getProperty("user.home");
+        if (StringUtils.isNotBlank(userHome)) {
+            switch (this) {
+                case POSTGRESQL -> roots.add(new File(userHome, ".m2/repository/org/postgresql/postgresql"));
+                case ORACLE -> roots.add(new File(userHome, ".m2/repository/com/oracle/database/jdbc"));
+                case DM -> roots.add(new File(userHome, ".m2/repository/com/dameng"));
+                case MYSQL -> {
+                    roots.add(new File(userHome, ".m2/repository/com/mysql/mysql-connector-j"));
+                    roots.add(new File(userHome, ".m2/repository/mysql/mysql-connector-java"));
+                }
+            }
+            roots.add(new File(userHome, ".gradle/caches/modules-2/files-2.1"));
+        }
+
+        for (File root : roots) {
+            File found = searchJarRecursively(root, jarPrefixHint, 6);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    @Nullable
+    private static File searchJarRecursively(File dir, String prefixHint, int maxDepth) {
+        if (dir == null || !dir.exists() || maxDepth < 0) {
+            return null;
+        }
+        File[] files = dir.listFiles();
+        if (files == null) {
+            return null;
+        }
+        // 优先匹配较新版本的目录或 JAR（倒序排列）
+        Arrays.sort(files, Comparator.comparing(File::getName).reversed());
+        String lowerHint = prefixHint.toLowerCase(Locale.ROOT);
+        for (File f : files) {
+            String name = f.getName();
+            if (f.isFile()
+                    && name.endsWith(".jar")
+                    && !name.endsWith("-sources.jar")
+                    && !name.endsWith("-javadoc.jar")
+                    && name.toLowerCase(Locale.ROOT).startsWith(lowerHint)) {
+                return f;
+            }
+        }
+        for (File f : files) {
+            if (f.isDirectory() && !f.getName().startsWith(".")) {
+                File sub = searchJarRecursively(f, prefixHint, maxDepth - 1);
+                if (sub != null) {
+                    return sub;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * DriverManager 代理包装器：解决 DriverManager 拒绝调用非系统 ClassLoader 加载的 Driver 问题
+     */
+    public static class DriverShim implements Driver {
+        private final Driver delegate;
+
+        public DriverShim(Driver delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public Connection connect(String url, Properties info) throws SQLException {
+            return delegate.connect(url, info);
+        }
+
+        @Override
+        public boolean acceptsURL(String url) throws SQLException {
+            return delegate.acceptsURL(url);
+        }
+
+        @Override
+        public DriverPropertyInfo[] getPropertyInfo(String url, Properties info) throws SQLException {
+            return delegate.getPropertyInfo(url, info);
+        }
+
+        @Override
+        public int getMajorVersion() {
+            return delegate.getMajorVersion();
+        }
+
+        @Override
+        public int getMinorVersion() {
+            return delegate.getMinorVersion();
+        }
+
+        @Override
+        public boolean jdbcCompliant() {
+            return delegate.jdbcCompliant();
+        }
+
+        @Override
+        public Logger getParentLogger() throws SQLFeatureNotSupportedException {
+            return delegate.getParentLogger();
         }
     }
 

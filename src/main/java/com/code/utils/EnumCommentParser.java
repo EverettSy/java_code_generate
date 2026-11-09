@@ -1,9 +1,9 @@
 package com.code.utils;
 
 import com.code.utils.entity.EnumsEntityContent;
-import com.google.common.collect.Lists;
 import org.apache.commons.lang3.StringUtils;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -37,7 +37,7 @@ public class EnumCommentParser {
      * 从数据库字段注释中解析枚举项列表
      */
     public static List<EnumsEntityContent> parseEnumItems(String rawComment) {
-        List<EnumsEntityContent> result = Lists.newArrayList();
+        List<EnumsEntityContent> result = new ArrayList<>();
         if (StringUtils.isBlank(rawComment)) {
             return result;
         }
@@ -50,7 +50,7 @@ public class EnumCommentParser {
             if (StringUtils.isBlank(inside)) {
                 continue;
             }
-            List<EnumsEntityContent> candidateItems = Lists.newArrayList();
+            List<EnumsEntityContent> candidateItems = new ArrayList<>();
             String[] parts = inside.split(ITEM_SPLIT_REGEX);
             for (String part : parts) {
                 if (StringUtils.isBlank(part)) {

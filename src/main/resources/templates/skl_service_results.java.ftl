@@ -3,9 +3,15 @@ package ${packageName}.service.results;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import ${packageName}.entity.${ClassName};
 import ${packageName}.entity.vo.${ClassName}VO;
+<#if mapperStrategy?? && mapperStrategy == "MAPSTRUCT">
+import ${packageName}.entity.converter.${ClassName}Converter;
+<#elseif mapperStrategy?? && mapperStrategy == "HUTOOL">
+import cn.hutool.core.convert.Convert;
+<#else>
+import org.springframework.beans.BeanUtils;
+</#if>
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -30,9 +36,15 @@ public class ${ClassName}ServiceResults {
         if (${className} == null) {
             return null;
         }
+<#if mapperStrategy?? && mapperStrategy == "MAPSTRUCT">
+        return ${ClassName}Converter.INSTANCE.entityToVO(${className});
+<#elseif mapperStrategy?? && mapperStrategy == "HUTOOL">
+        return Convert.convert(${ClassName}VO.class, ${className});
+<#else>
         ${ClassName}VO vo = new ${ClassName}VO();
         BeanUtils.copyProperties(${className}, vo);
         return vo;
+</#if>
     }
 
     /**
@@ -55,9 +67,13 @@ public class ${ClassName}ServiceResults {
         if (list == null) {
             return voList;
         }
+<#if mapperStrategy?? && mapperStrategy == "MAPSTRUCT">
+        return ${ClassName}Converter.INSTANCE.entityListToVOList(list);
+<#else>
         for (${ClassName} item : list) {
             voList.add(assignment(item));
         }
         return voList;
+</#if>
     }
 }
