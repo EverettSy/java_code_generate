@@ -6,9 +6,6 @@
     <!-- 插件名称 -->
     <name>Syrobin Java Code Generate</name>
 
-    <!-- 插件版本 -->
-    <version>4.0.0</version>
-
     <!-- 作者信息 -->
     <vendor
             url="https://github.com/EverettSy">
@@ -27,15 +24,15 @@
 
         <h3>Key Features (English)</h3>
         <ul>
-            <li><b>14-Template Full-Stack &amp; Multi-Module Generation:</b> One-click or modular generation of <code>Entity</code>, <code>BO</code>, <code>VO</code>, <code>Query</code>, <code>Enum</code>, <code>Mapper</code>, <code>Mapper.xml</code>, <code>MapStruct Converter</code>, <code>Service</code>, <code>ServiceImpl</code>, <code>ServiceQuery</code>, <code>ServiceResults</code>, <code>Controller</code>, and <code>Frontend TypeScript/Axios API</code> with per-layer Maven/Gradle sub-module routing and One-to-Many master-detail cascade generation.</li>
+            <li><b>20-Template Full-Stack &amp; Multi-Module Generation:</b> One-click or modular generation of <code>Entity</code>, <code>BO</code>, <code>VO</code>, <code>Query</code>, <code>Enum</code>, <code>Mapper</code>, <code>Mapper.xml</code>, <code>MapStruct Converter</code>, <code>Service</code>, <code>ServiceImpl</code>, <code>ServiceQuery</code>, <code>ServiceResults</code>, <code>Controller</code>, <code>Feign Client</code>, <code>Frontend TypeScript/Axios API</code>, <code>Vue 3 CRUD Page</code>, <code>HTTP Client</code>, <code>EasyExcel DTO</code>, <code>JUnit 5 Test</code>, and <code>Flyway Migration</code> with per-layer Maven/Gradle sub-module routing and One-to-Many master-detail cascade generation.</li>
             <li><b>Multi-Dialect &amp; Offline DDL AST Engine:</b> Supports live metadata extraction and dynamic Maven/Gradle JDBC driver loading for <b>MySQL, PostgreSQL, Oracle, and Dameng (DM8)</b>, plus 100% <b>offline DDL parsing</b> (including <code>COMMENT ON TABLE / COLUMN</code> and <code>ALTER TABLE ADD COLUMN</code>).</li>
             <li><b>PSI AST Incremental Merge, Live Diff &amp; One-Click Rollback:</b> Preserves hand-written business methods and custom imports via IntelliJ <code>PsiJavaFile</code> AST merging and <code>CodeStyleManager</code> formatting, with double-click single-file or batch <code>DiffRequestChain</code> live preview and transactional <code>LocalHistory</code> batch rollback.</li>
-            <li><b>Team Contract, Sidebar ToolWindow &amp; Live Template Workbench:</b> Share project conventions via <code>.syrobin-codegen.json</code>, store credentials securely in OS keychain via <code>PasswordSafe</code>, access the resident <code>Syrobin CodeGen</code> sidebar ToolWindow, and edit all 14 FreeMarker templates with side-by-side real-time rendering preview in Settings.</li>
+            <li><b>Team Contract, Sidebar ToolWindow &amp; Live Template Workbench:</b> Share project conventions via <code>.syrobin-codegen.json</code>, store credentials securely in OS keychain via <code>PasswordSafe</code>, access the resident <code>Syrobin CodeGen</code> sidebar ToolWindow, and edit all 20 FreeMarker templates with side-by-side real-time rendering preview in Settings.</li>
         </ul>
 
         <h3>核心特性（中文说明）</h3>
         <ul>
-            <li><b>14 套模板全栈生成、主子表联表与多模块分层投递：</b>支持一键生成 <code>Entity</code>、<code>BO</code>、<code>VO</code>、<code>Query</code>、<code>Enum</code>、<code>Mapper</code>、<code>Mapper.xml</code>、<code>MapStruct Converter</code>、<code>Service</code>、<code>ServiceImpl</code>、<code>ServiceQuery</code>、<code>ServiceResults</code>、<code>Controller</code> 与前端 <code>TypeScript/Axios API</code>，支持跨 Maven/Gradle 子模块路由、表前缀剥离、<code>BaseEntity</code> 公共基类继承及主子表（One-to-Many）级联生成。</li>
+            <li><b>20 套模板全栈生成、主子表联表与多模块分层投递：</b>支持一键生成 <code>Entity</code>、<code>BO</code>、<code>VO</code>、<code>Query</code>、<code>Enum</code>、<code>Mapper</code>、<code>Mapper.xml</code>、<code>MapStruct Converter</code>、<code>Service</code>、<code>ServiceImpl</code>、<code>ServiceQuery</code>、<code>ServiceResults</code>、<code>Controller</code>、<code>Feign Client</code>、前端 <code>TypeScript/Axios API</code> 与 <code>Vue 3</code> 页面、<code>HTTP Client</code> 脚本、<code>EasyExcel</code> 模型、<code>JUnit 5</code> 测试及 <code>Flyway</code> 迁移脚本，支持跨 Maven/Gradle 子模块路由、表前缀剥离、<code>BaseEntity</code> 公共基类继承及主子表（One-to-Many）级联生成。</li>
             <li><b>多方言动态驱动加载与全语法离线 DDL 引擎：</b>原生适配 <b>MySQL、PostgreSQL、Oracle、达梦（DM8）</b>，支持从本地 Maven/Gradle 仓库动态加载 JDBC 驱动，支持解析 PostgreSQL/Oracle 表外 <code>COMMENT ON TABLE/COLUMN</code> 及 <code>ALTER TABLE ADD COLUMN</code> 语句，并支持从 IDEA Database 面板右键直连生成。</li>
             <li><b>PSI 语法树级智能合并、双击/批量 Diff 预演与一键回滚：</b>基于 IntelliJ <code>PsiJavaFile</code> 抽象语法树与 <code>CodeStyleManager</code> 精准合并新增字段、枚举项与缺失 <code>import</code>，支持单文件双击或整表批量 <code>DiffRequestChain</code> 预演，并集成 <code>LocalHistory</code> 支持一键回滚最近一次生成批次。</li>
             <li><b>常驻侧边栏 ToolWindow、团队共享契约与实时模板沙箱工作台：</b>提供常驻右侧的 <code>Syrobin CodeGen</code> 工具窗口，支持导出 <code>.syrobin-codegen.json</code> 纳入 Git 团队共享，接入 <code>PasswordSafe</code> 钥匙串保护密码，并在 Settings 中提供左右分栏实时渲染的 FreeMarker 模板工作台。</li>
@@ -44,6 +41,13 @@
 
     <!-- 版本更新说明 -->
     <change-notes><![CDATA[
+        <h3>v4.0.0 - Extended Generators, Smart Inference, Extension Point &amp; Solid Glass UI (4.0 生成器扩展、智能推断与界面重构)</h3>
+        <ul>
+            <li><b>New Generators (新增生成器):</b> IntelliJ HTTP Client <code>.http</code> scripts, EasyExcel import/export DTO, Vue 3 + Element Plus CRUD page, JUnit 5 + Mockito Service tests, Flyway SQL migration, and tree-structure query. 新增 HTTP Client 脚本、EasyExcel 导入导出模型、Vue 3 CRUD 页面、JUnit 5 单元测试、Flyway 迁移脚本与树形结构查询，模板共 20 套。</li>
+            <li><b>Smart Inference (智能推断):</b> Rule-based natural-language table design, master-detail relation detection and query rule inference. 基于规则的自然语言建表、主子表关系识别与查询规则推断。</li>
+            <li><b>Open Extension (开放扩展):</b> <code>postProcessor</code> extension point and custom template packs. 新增 <code>postProcessor</code> 后置处理扩展点与自定义模板包。</li>
+            <li><b>Solid Glass UI (界面重构):</b> Redesigned wizard, ToolWindow and Settings with neutral surfaces, a single primary action and compact layout; plugin version is now shown from a single source. 向导、侧边栏与设置页统一为中性灰表面、单一主操作与紧凑布局，界面版本号改为自动读取。</li>
+        </ul>
         <h3>v3.0.0 - Enterprise Architecture, PSI AST Engine, Master-Detail &amp; Live Workbench (3.0 企业级全栈架构升级)</h3>
         <ul>
             <li><b>M1 - PSI AST Merge &amp; Multi-Module Routing (PSI 语法树合并与多模块路由):</b> Upgraded <code>IncrementalCodeMerger</code> to IntelliJ <code>PsiJavaFile</code> AST + <code>CodeStyleManager</code>, added double-click single-file and batch <code>DiffRequestChain</code> live preview, table prefix stripping (<code>t_</code>, <code>sys_</code>), <code>BaseEntity</code> inheritance, per-layer sub-module routing, <code>PasswordSafe</code> credential storage, and <code>.syrobin-codegen.json</code> team contract.</li>

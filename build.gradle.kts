@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.syrobin"
-version = "3.0.0"
+version = "4.0.0"
 
 repositories {
     mavenCentral()
@@ -76,6 +76,13 @@ tasks {
                 "Release tag '${releaseTag ?: "(unset)"}' does not match project version. Expected '$expectedTag'."
             }
         }
+    }
+
+    // 界面版本徽标读取该文件；平台读取插件版本的 API 均为 @ApiStatus.Internal
+    processResources {
+        val pluginVersion = project.version.toString()
+        inputs.property("pluginVersion", pluginVersion)
+        filesMatching("**/version.properties") { expand("version" to pluginVersion) }
     }
 
     withType<JavaCompile> {

@@ -42,6 +42,10 @@ public class CodeGenerateDialogTest extends BasePlatformTestCase {
         }
     }
 
+    public void testVersionBadgeComesFromBuildVersion() {
+        assertTrue(SolidGlassTheme.versionBadge(), SolidGlassTheme.versionBadge().matches("v\\d+\\.\\d+\\.\\d+"));
+    }
+
     public void testZeroSelectionDoesNotRecheckTablesDuringValidation() throws Exception {
         Map<?, ?> items = field("masterTableMap");
         for (Object item : items.values()) ((CodeGenerateDialog.TableItem) item).setChecked(false);

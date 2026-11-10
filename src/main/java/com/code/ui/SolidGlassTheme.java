@@ -20,6 +20,9 @@ import java.awt.event.FocusEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.RoundRectangle2D;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Properties;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -718,6 +721,20 @@ public final class SolidGlassTheme {
             } finally {
                 highlighting = false;
             }
+        }
+    }
+
+    /**
+     * 当前插件版本徽标（如 v4.0.0），版本号唯一来源为 build.gradle.kts
+     */
+    public static String versionBadge() {
+        try (InputStream in = SolidGlassTheme.class.getResourceAsStream("version.properties")) {
+            if (in == null) return "dev";
+            Properties props = new Properties();
+            props.load(in);
+            return "v" + props.getProperty("version");
+        } catch (IOException e) {
+            return "dev";
         }
     }
 

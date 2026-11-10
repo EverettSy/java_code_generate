@@ -73,7 +73,7 @@ public class SyrobinToolWindowFactory implements ToolWindowFactory, DumbAware {
         root.setBorder(JBUI.Borders.empty(8));
 
         StatusGlyph statusGlyph = new StatusGlyph("就绪", GlyphState.READY);
-        JPanel header = SolidGlassTheme.createCompactHeader("Syrobin CodeGen", "v4.0 GA", statusGlyph);
+        JPanel header = SolidGlassTheme.createCompactHeader("Syrobin CodeGen", SolidGlassTheme.versionBadge(), statusGlyph);
 
         // 1. 快捷操作面板（覆盖全栈向导、离线 DDL、已有接口转 Feign Client、Settings 模板沙箱、团队规范导出与一键回滚）
         SolidGlassPanel actionsCard = new SolidGlassPanel(new GridLayout(6, 1, 0, 6), Thickness.MEDIUM);
