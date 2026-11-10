@@ -1,5 +1,6 @@
 package com.code.ui;
 
+import com.intellij.openapi.ui.DialogWrapper;
 import com.intellij.openapi.ui.ValidationInfo;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 
@@ -14,6 +15,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 
 public class CodeGenerateDialogTest extends BasePlatformTestCase {
     private static final String DDL = "CREATE TABLE user_order (id bigint PRIMARY KEY, "
@@ -91,6 +93,15 @@ public class CodeGenerateDialogTest extends BasePlatformTestCase {
         assertEquals(0, queries.getRowCount());
     }
 
+    public void testQueryCardsGetHeightByRowCount() throws Exception {
+        DefaultTableModel queries = field("serviceQueryTableModel");
+        for (int i = 0; i < 6; i++) queries.addRow(new Object[]{"1:模糊查询", "c" + i, "c" + i, true, "", "", ""});
+        Component serviceCard = SwingUtilities.getAncestorOfClass(SolidGlassTheme.SolidGlassPanel.class, field("serviceQueryTable"));
+        Component subCard = SwingUtilities.getAncestorOfClass(SolidGlassTheme.SolidGlassPanel.class, field("subTableRelationTable"));
+        GridBagLayout bag = (GridBagLayout) serviceCard.getParent().getLayout();
+        assertTrue(bag.getConstraints(serviceCard).weighty > bag.getConstraints(subCard).weighty);
+    }
+
     public void testListFitsViewportAndPreviewDoesNotImplicitlyCheckTable() throws Exception {
         JList<?> list = field("tableJList");
         list.setSize(280, 200);
@@ -100,6 +111,8 @@ public class CodeGenerateDialogTest extends BasePlatformTestCase {
         call("syncCheckedTablesToSummaryField");
         list.dispatchEvent(new MouseEvent(list, MouseEvent.MOUSE_PRESSED, 0, 0, 100, 10, 1, false));
         assertFalse(dialog.isOKActionEnabled());
+        assertTrue(((JLabel) field("rightPreviewDetailsLabel")).getText().startsWith("未勾选"));
+        assertEquals("不参与", ((JTable) field("filePreviewTable")).getValueAt(0, 1));
         assertTrue(list.getToolTipText(new MouseEvent(list, MouseEvent.MOUSE_MOVED, 0, 0, 100, 10, 0, false)).contains("user_order"));
     }
 
@@ -116,6 +129,20 @@ public class CodeGenerateDialogTest extends BasePlatformTestCase {
         assertNotNull(title.getToolTipText());
     }
 
+    public void testPlanListsFilesAndConfirmButtonFollowsStrategy() throws Exception {
+        assertTrue(((JLabel) field("rightPreviewDetailsLabel")).getText().contains("预计 2 个文件"));
+        JTable table = field("filePreviewTable");
+        assertEquals("文件路径", table.getColumnName(0));
+        assertEquals("处理方式", table.getColumnName(1));
+        Component cell = table.getColumnModel().getColumn(0).getCellRenderer()
+                .getTableCellRendererComponent(table, "entity/UserOrder.java", false, false, 0, 0);
+        assertEquals("UserOrder.java", ((JLabel) cell).getText());
+        assertEquals("entity/UserOrder.java", ((JLabel) cell).getToolTipText());
+        assertEquals("开始生成", okActionName());
+        ((JComboBox<?>) field("writeStrategyCombo")).setSelectedIndex(1);
+        assertEquals("查看 Diff 并确认", okActionName());
+    }
+
     public void testZeroTargetsDisablesGeneration() throws Exception {
         Map<?, ?> targets = field("targetCheckBoxes");
         for (Object target : targets.values()) ((AbstractButton) target).setSelected(false);
@@ -128,6 +155,7 @@ public class CodeGenerateDialogTest extends BasePlatformTestCase {
         setField("currentSourceMode", mode.getEnumConstants()[0]);
         call("updateSummaryAndSourceIndicators");
         assertFalse(dialog.isOKActionEnabled());
+        assertFalse(((JButton) field("switchToDbModeBtn")).isVisible());
         assertNotNull(call("doValidate"));
         call("populateMasterTablesFromDbList", new Class<?>[]{java.util.List.class}, java.util.List.of("users (用户表)"));
         Map<?, ?> parsed = field("parsedDdlTables");
@@ -196,5 +224,12 @@ public class CodeGenerateDialogTest extends BasePlatformTestCase {
         Method method = CodeGenerateDialog.class.getDeclaredMethod(name, types);
         method.setAccessible(true);
         return (T) method.invoke(dialog, args);
+    }
+
+    private String okActionName() throws Exception {
+        Method method = DialogWrapper.class.getDeclaredMethod("getOKAction");
+        method.setAccessible(true);
+        Action action = (Action) method.invoke(dialog);
+        return action == null ? null : Objects.toString(action.getValue(Action.NAME), null);
     }
 }

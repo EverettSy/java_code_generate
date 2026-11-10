@@ -7,7 +7,7 @@
     <name>Syrobin Java Code Generate</name>
 
     <!-- 插件版本 -->
-    <version>3.0.0</version>
+    <version>4.0.0</version>
 
     <!-- 作者信息 -->
     <vendor
@@ -59,6 +59,11 @@
 
     <!-- 国际化资源包 -->
     <resource-bundle>messages.CodeGenBundle</resource-bundle>
+
+    <!-- 开放生态自定义代码生成后置处理器扩展点（v4.0 M3） -->
+    <extensionPoints>
+        <extensionPoint name="postProcessor" interface="com.code.spi.CodeGenPostProcessor" dynamic="true"/>
+    </extensionPoints>
 
     <!-- 扩展点 -->
     <extensions defaultExtensionNs="com.intellij">
@@ -209,6 +214,41 @@
                 class="com.code.action.MapperAction"
                 text="Generate Mapper"
                 description="Generate MyBatis-Plus Mapper interface">
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
+        </action>
+
+        <action id="Syrobin.CodeGenerate.HttpClientAction"
+                class="com.code.action.HttpClientAction"
+                text="Generate HTTP Client (.http)"
+                description="Generate IntelliJ HTTP Client (.http) API test script">
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
+        </action>
+
+        <action id="Syrobin.CodeGenerate.ExcelDtoAction"
+                class="com.code.action.ExcelDtoAction"
+                text="Generate EasyExcel DTO"
+                description="Generate EasyExcel import/export DTO model">
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
+        </action>
+
+        <action id="Syrobin.CodeGenerate.FrontendVueAction"
+                class="com.code.action.FrontendVueAction"
+                text="Generate Vue3 CRUD Page"
+                description="Generate Vue 3 + Element Plus CRUD page and TypeScript Axios API">
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
+        </action>
+
+        <action id="Syrobin.CodeGenerate.UnitTestAction"
+                class="com.code.action.UnitTestAction"
+                text="Generate JUnit 5 Service Test"
+                description="Generate JUnit 5 + Mockito Service unit test class">
+            <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
+        </action>
+
+        <action id="Syrobin.CodeGenerate.FlywayMigrationAction"
+                class="com.code.action.FlywayMigrationAction"
+                text="Generate Flyway SQL Migration"
+                description="Generate standardized Flyway / Liquibase SQL migration script">
             <add-to-group group-id="Syrobin.CodeGenerate.Group"/>
         </action>
 

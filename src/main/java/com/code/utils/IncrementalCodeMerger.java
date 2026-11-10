@@ -31,7 +31,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 增量代码合并与 Diff 对比预览引擎（v3.0：基于 IntelliJ 平台通用 PsiFile + 反射式 PsiJavaFile AST 语法树级智能合并 + CodeStyleManager 自动格式化 + 单文件与批量 DiffRequestChain 预演）
+ * 全语法增量代码合并与 Diff 对比预览引擎（v4.0 M1：支持 Java PSI AST 字段演进/注释/注解更新与枚举常量追加、Mapper.xml 节点增量合并、TypeScript 接口增量合并）
  *
  * @author syrobin
  */
@@ -69,7 +69,7 @@ public class IncrementalCodeMerger {
      * 匹配 Java 类中的字段声明块（包含上方紧邻的 Javadoc 注释与注解）
      */
     private static final Pattern FIELD_BLOCK_PATTERN = Pattern.compile(
-            "((?:\\s*/\\*\\*[\\s\\S]*?\\*/\\s*)?(?:\\s*@[A-Za-z0-9_$.]+(?:\\([^)]*\\))?\\s*)*\\s*(?:private|protected|public)\\s+(?!static\\s+final\\b)[A-Za-z0-9_$<>\\[\\],\\s]+\\s+([a-zA-Z0-9_$]+)\\s*(?:=[^;]+)?;)"
+            "((?:[ \\t]*/\\*\\*[\\s\\S]*?\\*/\\s*)?(?:[ \\t]*@[A-Za-z0-9_$.]+(?:\\([^)]*\\))?\\s*)*[ \\t]*(?:private|protected|public)\\s+(?!static\\s+final\\b)[A-Za-z0-9_$<>\\[\\],\\s]+\\s+([a-zA-Z0-9_$]+)\\s*(?:=[^;]+)?;)"
     );
 
     /**
@@ -78,7 +78,42 @@ public class IncrementalCodeMerger {
     private static final Pattern IMPORT_PATTERN = Pattern.compile("^\\s*import\\s+([^;]+);\\s*$", Pattern.MULTILINE);
 
     /**
-     * 根据指定的写入策略将生成的代码写入目标文件
+     * 匹配枚举常量项，如 `WAIT_PAY(0, "待支付")`
+     */
+    private static final Pattern ENUM_CONSTANT_PATTERN = Pattern.compile(
+            "((?:[ \\t]*/\\*\\*[\\s\\S]*?\\*/\\s*)?[ \\t]*([A-Z][A-Z0-9_]*)\\s*\\([^)]*\\))"
+    );
+
+    /**
+     * 匹配 MyBatis Mapper.xml 中的 <id .../> 或 <result .../> 映射行
+     */
+    private static final Pattern XML_RESULT_ITEM_PATTERN = Pattern.compile(
+            "(<(?:id|result)\\s+[^>]*column=\"([^\"]+)\"[^>]*/>)"
+    );
+
+    /**
+     * 匹配 MyBatis Mapper.xml 中的 <sql id="Base_Column_List">...</sql>
+     */
+    private static final Pattern XML_BASE_COLUMN_LIST_PATTERN = Pattern.compile(
+            "(<sql\\s+id=\"Base_Column_List\"\\s*>)([\\s\\S]*?)(</sql>)"
+    );
+
+    /**
+     * 匹配 TypeScript export interface 块
+     */
+    private static final Pattern TS_INTERFACE_PATTERN = Pattern.compile(
+            "(export\\s+interface\\s+([A-Za-z0-9_]+)\\s*\\{)([\\s\\S]*?)(\\n\\})"
+    );
+
+    /**
+     * 匹配 TypeScript 接口内的属性声明块（含上方紧邻的 JSDoc 注释）
+     */
+    private static final Pattern TS_PROPERTY_PATTERN = Pattern.compile(
+            "((?:[ \\t]*/\\*\\*[\\s\\S]*?\\*/\\s*)?[ \\t]*([a-zA-Z0-9_$]+)\\??\\s*:[^;]+;)"
+    );
+
+    /**
+     * 根据指定的写入策略将生成的代码写入目标文件（自动按 .java / .xml / .ts 分发增量合并）
      */
     public static void writeWithStrategy(@Nullable Project project,
                                          String generatedContent,
@@ -97,10 +132,10 @@ public class IncrementalCodeMerger {
 
         String existingContent = Files.readString(targetFile.toPath(), StandardCharsets.UTF_8);
         String candidateContent = (strategy == WriteStrategy.INCREMENTAL_MERGE || strategy == WriteStrategy.DIFF_PREVIEW)
-                ? mergeJavaSource(project, existingContent, generatedContent)
+                ? mergeSourceByExtension(project, targetFile.getName(), existingContent, generatedContent)
                 : generatedContent;
 
-        if (Objects.equals(existingContent.trim(), candidateContent.trim())) {
+        if (StringUtils.equals(existingContent.trim(), candidateContent.trim())) {
             return;
         }
 
@@ -112,6 +147,27 @@ public class IncrementalCodeMerger {
         }
 
         CodeGenerateUtils.writeFile(candidateContent, targetFilePath);
+    }
+
+    /**
+     * 根据文件扩展名智能分发增量合并策略（支持 .java / .xml / .ts）
+     */
+    @NotNull
+    public static String mergeSourceByExtension(@Nullable Project project,
+                                                @NotNull String fileName,
+                                                @NotNull String existingContent,
+                                                @NotNull String generatedContent) {
+        String lower = fileName.toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".java")) {
+            return mergeJavaSource(project, existingContent, generatedContent);
+        }
+        if (lower.endsWith(".xml")) {
+            return mergeXmlSource(existingContent, generatedContent);
+        }
+        if (lower.endsWith(".ts")) {
+            return mergeTypeScriptSource(existingContent, generatedContent);
+        }
+        return generatedContent;
     }
 
     /**
@@ -198,32 +254,48 @@ public class IncrementalCodeMerger {
                     Object[] targetFields = invokeArray(targetClassObj, "getFields");
                     Object[] sourceFields = invokeArray(sourceClassObj, "getFields");
                     if (targetFields != null && sourceFields != null) {
-                        Set<String> existingFieldNames = new HashSet<>();
+                        Map<String, PsiElement> existingFieldMap = new LinkedHashMap<>();
                         PsiElement lastInstanceField = null;
                         for (Object f : targetFields) {
                             String fName = String.valueOf(invokeNoArg(f, "getName"));
-                            existingFieldNames.add(fName);
-                            if (f instanceof PsiElement fEl && !"serialVersionUID".equals(fName)) {
-                                lastInstanceField = fEl;
+                            if (f instanceof PsiElement fEl) {
+                                existingFieldMap.put(fName, fEl);
+                                if (!"serialVersionUID".equals(fName)) {
+                                    lastInstanceField = fEl;
+                                }
                             }
                         }
 
                         for (Object genFieldObj : sourceFields) {
                             String fieldName = String.valueOf(invokeNoArg(genFieldObj, "getName"));
-                            if (genFieldObj instanceof PsiElement genField && StringUtils.isNotBlank(fieldName) && !existingFieldNames.contains(fieldName)) {
-                                PsiElement copiedField = genField.copy();
-                                if (lastInstanceField != null) {
-                                    lastInstanceField = targetClass.addAfter(copiedField, lastInstanceField);
-                                } else {
-                                    Object[] methods = invokeArray(targetClassObj, "getMethods");
-                                    if (methods != null && methods.length > 0 && methods[0] instanceof PsiElement firstMethod) {
-                                        lastInstanceField = targetClass.addBefore(copiedField, firstMethod);
+                            if (genFieldObj instanceof PsiElement genField && StringUtils.isNotBlank(fieldName)) {
+                                PsiElement existingField = existingFieldMap.get(fieldName);
+                                if (existingField == null) {
+                                    PsiElement copiedField = genField.copy();
+                                    if (lastInstanceField != null) {
+                                        lastInstanceField = targetClass.addAfter(copiedField, lastInstanceField);
                                     } else {
-                                        lastInstanceField = targetClass.add(copiedField);
+                                        Object[] methods = invokeArray(targetClassObj, "getMethods");
+                                        if (methods != null && methods.length > 0 && methods[0] instanceof PsiElement firstMethod) {
+                                            lastInstanceField = targetClass.addBefore(copiedField, firstMethod);
+                                        } else {
+                                            lastInstanceField = targetClass.add(copiedField);
+                                        }
+                                    }
+                                    existingFieldMap.put(fieldName, lastInstanceField);
+                                    changed = true;
+                                } else if (!"serialVersionUID".equals(fieldName)) {
+                                    String normOld = existingField.getText().replaceAll("\\s+", " ").trim();
+                                    String normNew = genField.getText().replaceAll("\\s+", " ").trim();
+                                    if (!normOld.equals(normNew)) {
+                                        PsiElement replaced = existingField.replace(genField.copy());
+                                        if (lastInstanceField == existingField) {
+                                            lastInstanceField = replaced;
+                                        }
+                                        existingFieldMap.put(fieldName, replaced);
+                                        changed = true;
                                     }
                                 }
-                                existingFieldNames.add(fieldName);
-                                changed = true;
                             }
                         }
                     }
@@ -267,6 +339,7 @@ public class IncrementalCodeMerger {
     private static String mergeJavaSourceFallback(String existingSource, String generatedSource) {
         String result = existingSource;
 
+        // 1. 增量补齐缺失的 import
         Set<String> existingImports = extractImports(existingSource);
         Set<String> generatedImports = extractImports(generatedSource);
         List<String> missingImports = new ArrayList<>();
@@ -285,12 +358,27 @@ public class IncrementalCodeMerger {
             }
         }
 
-        Set<String> existingFieldNames = extractFieldMap(result).keySet();
+        // 2. 若是枚举类 (public enum ...)，增量合并新增的枚举常量项
+        if (result.contains("public enum ") && generatedSource.contains("public enum ")) {
+            result = mergeEnumConstants(result, generatedSource);
+        }
+
+        // 3. 同步已有字段的演进（类型/注释/校验注解变更）并收集新增字段
+        Map<String, String> existingFields = extractFieldMap(result);
         Map<String, String> generatedFields = extractFieldMap(generatedSource);
         List<String> newFieldBlocks = new ArrayList<>();
         for (Map.Entry<String, String> entry : generatedFields.entrySet()) {
-            if (!existingFieldNames.contains(entry.getKey())) {
-                newFieldBlocks.add(entry.getValue());
+            String fieldName = entry.getKey();
+            String genBlock = entry.getValue();
+            if (!existingFields.containsKey(fieldName)) {
+                newFieldBlocks.add(genBlock);
+            } else {
+                String oldBlock = existingFields.get(fieldName);
+                String normOld = oldBlock.replaceAll("\\s+", " ").trim();
+                String normNew = genBlock.replaceAll("\\s+", " ").trim();
+                if (!normOld.equals(normNew)) {
+                    result = result.replace(oldBlock.trim(), genBlock.trim());
+                }
             }
         }
 
@@ -302,6 +390,175 @@ public class IncrementalCodeMerger {
                     insertion.append("\n    ").append(block.trim()).append("\n");
                 }
                 result = result.substring(0, lastBraceIndex) + insertion + result.substring(lastBraceIndex);
+            }
+        }
+
+        return result;
+    }
+
+    private static String mergeEnumConstants(String existingEnumSource, String generatedEnumSource) {
+        Map<String, String> existingConsts = extractEnumConstants(existingEnumSource);
+        Map<String, String> generatedConsts = extractEnumConstants(generatedEnumSource);
+        List<String> newConstBlocks = new ArrayList<>();
+        for (Map.Entry<String, String> entry : generatedConsts.entrySet()) {
+            if (!existingConsts.containsKey(entry.getKey())) {
+                newConstBlocks.add(entry.getValue().trim());
+            }
+        }
+        if (newConstBlocks.isEmpty()) {
+            return existingEnumSource;
+        }
+        int enumIdx = existingEnumSource.indexOf("public enum ");
+        int openBrace = existingEnumSource.indexOf('{', enumIdx);
+        int semiIdx = existingEnumSource.indexOf(';', openBrace);
+        if (openBrace > 0 && semiIdx > openBrace) {
+            String insertion = ",\n\n    " + String.join(",\n\n    ", newConstBlocks);
+            return existingEnumSource.substring(0, semiIdx) + insertion + existingEnumSource.substring(semiIdx);
+        }
+        return existingEnumSource;
+    }
+
+    private static Map<String, String> extractEnumConstants(String source) {
+        Map<String, String> map = new LinkedHashMap<>();
+        int enumIdx = source.indexOf("public enum ");
+        if (enumIdx < 0) {
+            return map;
+        }
+        int openBrace = source.indexOf('{', enumIdx);
+        int semiIdx = source.indexOf(';', openBrace);
+        if (openBrace < 0 || semiIdx < openBrace) {
+            return map;
+        }
+        String constantRegion = source.substring(openBrace + 1, semiIdx);
+        Matcher m = ENUM_CONSTANT_PATTERN.matcher(constantRegion);
+        while (m.find()) {
+            map.put(m.group(2).trim(), m.group(1));
+        }
+        return map;
+    }
+
+    /**
+     * 增量合并 MyBatis Mapper.xml（v4.0 M1）：
+     * 合并 <resultMap id="BaseResultMap"> 中的新增 <result/> 映射与 <sql id="Base_Column_List"> 中的新增列，保留手写 SQL 标签
+     */
+    @NotNull
+    public static String mergeXmlSource(@Nullable String existingXml, @Nullable String generatedXml) {
+        if (StringUtils.isBlank(existingXml)) {
+            return StringUtils.defaultString(generatedXml);
+        }
+        if (StringUtils.isBlank(generatedXml)) {
+            return existingXml;
+        }
+        String result = existingXml;
+
+        // 1. 合并 BaseResultMap 中新增的 <id/> / <result/> 节点
+        Set<String> existingCols = new LinkedHashSet<>();
+        Matcher existResultMatcher = XML_RESULT_ITEM_PATTERN.matcher(result);
+        while (existResultMatcher.find()) {
+            existingCols.add(existResultMatcher.group(2).trim().toLowerCase(Locale.ROOT));
+        }
+
+        List<String> newResultTags = new ArrayList<>();
+        Matcher genResultMatcher = XML_RESULT_ITEM_PATTERN.matcher(generatedXml);
+        while (genResultMatcher.find()) {
+            String tag = genResultMatcher.group(1).trim();
+            String colName = genResultMatcher.group(2).trim();
+            if (!existingCols.contains(colName.toLowerCase(Locale.ROOT))) {
+                newResultTags.add("        " + tag);
+                existingCols.add(colName.toLowerCase(Locale.ROOT));
+            }
+        }
+
+        if (!newResultTags.isEmpty()) {
+            int closeResultMap = result.indexOf("</resultMap>");
+            if (closeResultMap > 0) {
+                String insertion = String.join("\n", newResultTags) + "\n    ";
+                result = result.substring(0, closeResultMap) + insertion + result.substring(closeResultMap);
+            }
+        }
+
+        // 2. 合并 <sql id="Base_Column_List"> 中的列名列表
+        Matcher existSqlMatcher = XML_BASE_COLUMN_LIST_PATTERN.matcher(result);
+        Matcher genSqlMatcher = XML_BASE_COLUMN_LIST_PATTERN.matcher(generatedXml);
+        if (existSqlMatcher.find() && genSqlMatcher.find()) {
+            String existColsRaw = existSqlMatcher.group(2).trim();
+            String genColsRaw = genSqlMatcher.group(2).trim();
+            Set<String> mergedColSet = new LinkedHashSet<>();
+            Map<String, String> caseMap = new LinkedHashMap<>();
+            for (String c : existColsRaw.split(",")) {
+                String trimmed = c.trim();
+                if (!trimmed.isEmpty()) {
+                    mergedColSet.add(trimmed.toLowerCase(Locale.ROOT));
+                    caseMap.put(trimmed.toLowerCase(Locale.ROOT), trimmed);
+                }
+            }
+            boolean addedCol = false;
+            for (String c : genColsRaw.split(",")) {
+                String trimmed = c.trim();
+                if (!trimmed.isEmpty() && mergedColSet.add(trimmed.toLowerCase(Locale.ROOT))) {
+                    caseMap.put(trimmed.toLowerCase(Locale.ROOT), trimmed);
+                    addedCol = true;
+                }
+            }
+            if (addedCol) {
+                String newSqlBody = "\n        " + String.join(", ", caseMap.values()) + "\n    ";
+                result = result.substring(0, existSqlMatcher.start(2)) + newSqlBody + result.substring(existSqlMatcher.end(2));
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * 增量合并前端 TypeScript (.api.ts) 文件（v4.0 M1）：
+     * 合并各 export interface 中新增的属性与注释，同时完整保留开发者手写的自定义请求函数与拦截器逻辑
+     */
+    @NotNull
+    public static String mergeTypeScriptSource(@Nullable String existingTs, @Nullable String generatedTs) {
+        if (StringUtils.isBlank(existingTs)) {
+            return StringUtils.defaultString(generatedTs);
+        }
+        if (StringUtils.isBlank(generatedTs)) {
+            return existingTs;
+        }
+        String result = existingTs;
+
+        Map<String, String> genInterfaces = new LinkedHashMap<>();
+        Matcher genMatcher = TS_INTERFACE_PATTERN.matcher(generatedTs);
+        while (genMatcher.find()) {
+            genInterfaces.put(genMatcher.group(2).trim(), genMatcher.group(3));
+        }
+
+        for (Map.Entry<String, String> entry : genInterfaces.entrySet()) {
+            String ifaceName = entry.getKey();
+            String genBody = entry.getValue();
+            Pattern singleIfacePattern = Pattern.compile(
+                    "(export\\s+interface\\s+" + Pattern.quote(ifaceName) + "\\s*\\{)([\\s\\S]*?)(\\n\\})"
+            );
+            Matcher existMatcher = singleIfacePattern.matcher(result);
+            if (!existMatcher.find()) {
+                continue;
+            }
+            String existBody = existMatcher.group(2);
+            Set<String> existingProps = new HashSet<>();
+            Matcher existPropMatcher = TS_PROPERTY_PATTERN.matcher(existBody);
+            while (existPropMatcher.find()) {
+                existingProps.add(existPropMatcher.group(2).trim());
+            }
+
+            List<String> newPropBlocks = new ArrayList<>();
+            Matcher genPropMatcher = TS_PROPERTY_PATTERN.matcher(genBody);
+            while (genPropMatcher.find()) {
+                String propName = genPropMatcher.group(2).trim();
+                if (!existingProps.contains(propName)) {
+                    newPropBlocks.add("  " + genPropMatcher.group(1).trim());
+                    existingProps.add(propName);
+                }
+            }
+
+            if (!newPropBlocks.isEmpty()) {
+                String updatedBody = existBody + "\n" + String.join("\n", newPropBlocks);
+                result = result.substring(0, existMatcher.start(2)) + updatedBody + result.substring(existMatcher.end(2));
             }
         }
 
@@ -331,7 +588,7 @@ public class IncrementalCodeMerger {
     }
 
     /**
-     * 构建单个文件的 DiffRequest（支持 Java / XML / TypeScript 语法高亮）
+     * 构建单个文件的 DiffRequest（支持 Java / XML / TypeScript / HTTP 语法高亮与增量合并预演）
      */
     @NotNull
     public static SimpleDiffRequest buildFileDiffRequest(@NotNull Project project,
@@ -348,16 +605,16 @@ public class IncrementalCodeMerger {
             }
         }
 
-        boolean isJava = fileName.endsWith(".java");
-        String rightSideContent = (targetFile.exists() && isJava && strategy != WriteStrategy.OVERWRITE)
-                ? mergeJavaSource(project, existingContent, generatedContent)
+        boolean supportsMerge = fileName.endsWith(".java") || fileName.endsWith(".xml") || fileName.endsWith(".ts");
+        String rightSideContent = (targetFile.exists() && supportsMerge && strategy != WriteStrategy.OVERWRITE)
+                ? mergeSourceByExtension(project, fileName, existingContent, generatedContent)
                 : generatedContent;
 
         String leftTitle = targetFile.exists()
                 ? "当前磁盘已有文件 (" + fileName + ")"
                 : "当前磁盘尚无此文件（将新增 " + fileName + "）";
-        String rightTitle = (targetFile.exists() && isJava && strategy != WriteStrategy.OVERWRITE)
-                ? "PSI AST 增量合并后预览 (" + fileName + ")"
+        String rightTitle = (targetFile.exists() && supportsMerge && strategy != WriteStrategy.OVERWRITE)
+                ? "AST 增量合并后预览 (" + fileName + ")"
                 : "新生成代码预览 (" + fileName + ")";
 
         String ext = fileName.contains(".") ? fileName.substring(fileName.lastIndexOf('.') + 1) : "java";
@@ -392,7 +649,7 @@ public class IncrementalCodeMerger {
     }
 
     /**
-     * 批量变更集汇总 Diff 预览（v3.0 建设矩阵域 1.2：使用 SimpleDiffRequestChain 在同一窗口内切换预览整张表或整批生成的所有文件变更）
+     * 批量变更集汇总 Diff 预览（使用 SimpleDiffRequestChain 在同一窗口内切换预览整张表或整批生成的所有文件变更）
      */
     public static void openBatchDiffPreviewChain(@NotNull Project project,
                                                  @NotNull Map<String, String> renderedFilesMap,
@@ -422,14 +679,15 @@ public class IncrementalCodeMerger {
                                                     String mergedContent) {
         AtomicBoolean approved = new AtomicBoolean(false);
         Runnable task = () -> {
-            FileType javaFileType = FileTypeManager.getInstance().getFileTypeByExtension("java");
+            String ext = fileName.contains(".") ? fileName.substring(fileName.lastIndexOf('.') + 1) : "java";
+            FileType fileType = FileTypeManager.getInstance().getFileTypeByExtension(ext);
             DiffContentFactory contentFactory = DiffContentFactory.getInstance();
             SimpleDiffRequest diffRequest = new SimpleDiffRequest(
                     "Syrobin Code Generate Diff 预览 - " + fileName,
-                    contentFactory.create(project, existingContent, javaFileType),
-                    contentFactory.create(project, mergedContent, javaFileType),
+                    contentFactory.create(project, existingContent, fileType),
+                    contentFactory.create(project, mergedContent, fileType),
                     "当前工程已有文件 (" + fileName + ")",
-                    "PSI 增量合并后新文件 (" + fileName + ")"
+                    "增量合并后新文件 (" + fileName + ")"
             );
             DiffManager.getInstance().showDiff(project, diffRequest);
 

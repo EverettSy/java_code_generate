@@ -13,7 +13,7 @@ import java.io.Serializable;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.Date;
-<#if subTableRelations?? && (subTableRelations?size > 0)>
+<#if (subTableRelations?? && (subTableRelations?size > 0)) || (treeTable?? && treeTable)>
 import java.util.List;
 </#if>
 <#if enumsList?? && (enumsList?size > 0)>
@@ -48,6 +48,18 @@ public class ${ClassName}VO implements Serializable {
 </#if>
     private ${column.dataType} ${column.columnName};
 </#list>
+<#if treeTable?? && treeTable>
+
+    /**
+     * 树形子节点集合
+     */
+<#if docStyle?? && docStyle == "SWAGGER2">
+    @ApiModelProperty(value = "树形子节点集合")
+<#elseif docStyle?? && docStyle == "OPENAPI3">
+    @Schema(description = "树形子节点集合")
+</#if>
+    private List<${ClassName}VO> children;
+</#if>
 <#if subTableRelations?? && (subTableRelations?size > 0)>
 <#list subTableRelations as rel>
 

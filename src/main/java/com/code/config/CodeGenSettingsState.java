@@ -39,14 +39,15 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * 项目级持久化配置与团队共享契约服务（v3.0 M1 + M2 + M3 完整版）
+ * 项目级持久化配置与团队共享契约服务（v4.0 M1 完整版）
  *
  * 核心升级：
  * 1. 接入 IntelliJ 原生 PasswordSafe 系统钥匙串管理数据库凭证（无头测试环境自动降级至 encodedAuth）
  * 2. 新增表名前缀自动剥离（tablePrefixes）、实体公共基类（baseEntityClass）与忽略字段列表（ignoredBaseColumns）
  * 3. 新增多模块微服务分层路由映射（layerModuleRouting）与对象映射策略（mapperStrategy: BEAN_UTILS / MAPSTRUCT / HUTOOL）
- * 4. 模板清单扩展至 14 套（含 skl_mapper_xml.xml.ftl、skl_converter.java.ftl 与 skl_frontend_api.ts.ftl）
- * 5. 支持主子表（One-to-Many）关联关系（subTableRelationCache）持久化与 `.syrobin-codegen.json` 团队规范同步
+ * 4. 新增企业级统一响应体包装配置（responseWrapperClass / responseWrapperSuccessMethod）
+ * 5. 模板清单扩展至 16 套（含 skl_mapper_xml.xml.ftl、skl_converter.java.ftl、skl_feign_client.java.ftl、skl_frontend_api.ts.ftl 与 skl_http_client.http.ftl）
+ * 6. 支持主子表（One-to-Many）关联关系（subTableRelationCache）持久化与 `.syrobin-codegen.json` 团队规范同步
  *
  * @author syrobin
  */
@@ -66,6 +67,7 @@ public final class CodeGenSettingsState implements PersistentStateComponent<Code
             "skl_entity_vo.java.ftl",
             "skl_entity_query.java.ftl",
             "skl_entity_enums.java.ftl",
+            "skl_excel_dto.java.ftl",
             "skl_mapper.java.ftl",
             "skl_mapper_xml.xml.ftl",
             "skl_converter.java.ftl",
@@ -75,14 +77,18 @@ public final class CodeGenSettingsState implements PersistentStateComponent<Code
             "skl_service_results.java.ftl",
             "skl_controller.java.ftl",
             "skl_feign_client.java.ftl",
-            "skl_frontend_api.ts.ftl"
+            "skl_frontend_api.ts.ftl",
+            "skl_frontend_vue.vue.ftl",
+            "skl_http_client.http.ftl",
+            "skl_unit_test.java.ftl",
+            "skl_flyway_migration.sql.ftl"
     };
 
     /**
      * 团队共享配置契约 DTO（对应工程根目录 .syrobin-codegen.json，不含任何敏感账号密码）
      */
     public static class TeamContract {
-        public String schemaVersion = "3.0";
+        public String schemaVersion = "4.0";
         public String packageName = "com.example";
         public String author = "syrobin";
         public String tablePrefixes = "";
@@ -93,6 +99,8 @@ public final class CodeGenSettingsState implements PersistentStateComponent<Code
         public String docStyle = "NONE";
         public String mapperStrategy = "BEAN_UTILS";
         public String feignServiceName = "";
+        public String responseWrapperClass = "";
+        public String responseWrapperSuccessMethod = "ok";
         public boolean enableValidation = true;
         public Map<String, String> layerModuleRouting = new LinkedHashMap<>();
         public Map<String, String> customTemplates = new LinkedHashMap<>();
@@ -130,6 +138,12 @@ public final class CodeGenSettingsState implements PersistentStateComponent<Code
         // v3.0：Spring Cloud OpenFeign 目标微服务名称（留空则默认按 "${moduleName}-service" 生成）
         public String feignServiceName = "";
 
+        // v4.0 M1：企业统一响应体包装类全限定名（例如 "com.example.common.Result"，留空则直接返回原始类型）
+        public String responseWrapperClass = "";
+
+        // v4.0 M1：统一响应体静态成功工厂方法名（默认 "ok"，例如 Result.ok(...)）
+        public String responseWrapperSuccessMethod = "ok";
+
         // P3：是否开启字段 Bean Validation 校验注解智能生成
         public boolean enableValidation = true;
 
@@ -148,7 +162,7 @@ public final class CodeGenSettingsState implements PersistentStateComponent<Code
         // v3.0 M1：多模块微服务分层子模块路由（例如 entity -> order-dao, controller -> order-web, default -> 当前选中模块）
         public Map<String, String> layerModuleRouting = new HashMap<>();
 
-        // P2 + M2 + M3：Settings 模板中心在线自定义模板存储（templateName -> ftlContent）
+        // P2 + M2 + M3 + 4.0 M1：Settings 模板中心在线自定义模板存储（templateName -> ftlContent）
         public Map<String, String> customTemplates = new HashMap<>();
 
         public Map<String, String> beanQueryCache = new HashMap<>();
@@ -285,6 +299,8 @@ public final class CodeGenSettingsState implements PersistentStateComponent<Code
         contract.docStyle = Objects.toString(state.docStyle, "NONE");
         contract.mapperStrategy = Objects.toString(state.mapperStrategy, "BEAN_UTILS");
         contract.feignServiceName = StringUtils.defaultString(state.feignServiceName);
+        contract.responseWrapperClass = StringUtils.defaultString(state.responseWrapperClass);
+        contract.responseWrapperSuccessMethod = StringUtils.defaultIfBlank(state.responseWrapperSuccessMethod, "ok");
         contract.enableValidation = state.enableValidation;
         if (state.layerModuleRouting != null) {
             contract.layerModuleRouting.putAll(state.layerModuleRouting);
@@ -352,6 +368,12 @@ public final class CodeGenSettingsState implements PersistentStateComponent<Code
             }
             if (contract.feignServiceName != null) {
                 state.feignServiceName = contract.feignServiceName.trim();
+            }
+            if (contract.responseWrapperClass != null) {
+                state.responseWrapperClass = contract.responseWrapperClass.trim();
+            }
+            if (StringUtils.isNotBlank(contract.responseWrapperSuccessMethod)) {
+                state.responseWrapperSuccessMethod = contract.responseWrapperSuccessMethod.trim();
             }
             state.enableValidation = contract.enableValidation;
             if (contract.layerModuleRouting != null && !contract.layerModuleRouting.isEmpty()) {

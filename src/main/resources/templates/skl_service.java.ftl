@@ -21,6 +21,13 @@ public interface ${ClassName}Service extends IService<${ClassName}> {
      * 集合条件查询
      */
     List<${ClassName}VO> listEnhance(${ClassName}Query ${className}Query);
+<#if treeTable?? && treeTable>
+
+    /**
+     * 树形结构查询
+     */
+    List<${ClassName}VO> treeEnhance(${ClassName}Query ${className}Query);
+</#if>
 
     /**
      * 分页条件查询

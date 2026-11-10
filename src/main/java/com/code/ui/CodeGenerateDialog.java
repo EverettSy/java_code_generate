@@ -11,17 +11,23 @@ import com.code.ui.SolidGlassTheme.StatusGlyph;
 import com.code.ui.SolidGlassTheme.Thickness;
 import com.code.utils.CodeGenerate;
 import com.code.utils.CodeGenerateUtils;
+import com.code.utils.DatabaseDialect;
+import com.code.utils.DdlMigrationGenerator;
 import com.code.utils.DdlSqlParser;
 import com.code.utils.EnumCommentParser;
 import com.code.utils.FeignClientConverter;
 import com.code.utils.IncrementalCodeMerger;
 import com.code.utils.LocalHistoryHelper;
+import com.code.utils.NaturalLanguageDdlInferenceEngine;
+import com.code.utils.RelationTopologyDetector;
+import com.code.utils.SmartQueryRuleInferencer;
 import com.code.utils.ValidationAnnotationResolver;
 import com.code.utils.entity.BeanQuery;
 import com.code.utils.entity.EnumsEntityContent;
 import com.code.utils.entity.ServiceQuery;
 import com.code.utils.entity.SubTableRelation;
 import com.code.utils.entity.Table;
+import com.intellij.icons.AllIcons;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.progress.ProgressIndicator;
 import com.intellij.openapi.progress.ProgressManager;
@@ -53,6 +59,10 @@ import javax.swing.table.DefaultTableModel;
 import javax.swing.table.TableColumn;
 import java.awt.*;
 import java.awt.datatransfer.StringSelection;
+import java.awt.event.ActionEvent;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.io.File;
@@ -167,6 +177,7 @@ public class CodeGenerateDialog extends DialogWrapper {
     private final SourceBadge sourceBadge = new SourceBadge("来源：数据库连接");
     private final StatusGlyph verificationBadge = new StatusGlyph("未验证连接", GlyphState.IDLE);
     private final GlassButton rollbackLastBtn = new GlassButton("回滚上次生成");
+    private JMenuItem rollbackMenuItem;
 
     // 基础配置输入框
     private final JBTextField authorField = new JBTextField();
@@ -175,10 +186,11 @@ public class CodeGenerateDialog extends DialogWrapper {
     private final JBTextField selectedTablesReadOnlyField = new JBTextField();
     private final JBTextField fixedEnumField = new JBTextField();
 
-    // v3.0 M1 + Feign 扩展：表名前缀剥离、实体公共基类、Feign 目标微服务名称与多模块分层路由
+    // v4.0 M1 扩展：表名前缀剥离、实体公共基类、Feign 目标微服务名称、统一响应包装与多模块分层路由
     private final JBTextField tablePrefixesField = new JBTextField();
     private final JBTextField baseEntityField = new JBTextField();
     private final JBTextField feignServiceNameField = new JBTextField();
+    private final JBTextField responseWrapperField = new JBTextField();
     private final Map<String, String> customLayerModuleRouting = new LinkedHashMap<>();
 
     // 写入方式、文档注解、对象转换策略与校验注解控件
@@ -197,7 +209,13 @@ public class CodeGenerateDialog extends DialogWrapper {
 
     // 生成目标标准复选框 (JBCheckBox) 与计数标签
     private final Map<String, JBCheckBox> targetCheckBoxes = new LinkedHashMap<>();
-    private final JLabel targetSelectionCountLabel = new JLabel("生成选项（已选 10 / 14 项）");
+    private JButton targetsToggleBtn;
+    private GlassButton targetsEditBtn;
+    private boolean targetsExpanded;
+    private String targetsSummaryTooltip = "";
+    private JButton advancedToggleBtn;
+    private boolean advancedExpanded;
+    private JSplitPane workbenchSplit;
 
     // 底部「开始生成」旁实时摘要与输出路径标签（严格仅统计已勾选待生成对象）
     private final JLabel footerSummaryLabel = new JLabel();
@@ -228,6 +246,12 @@ public class CodeGenerateDialog extends DialogWrapper {
     // 右侧：生成文件预览（支持双击任意行直接打开单文件实时 Diff 预演）
     private final JLabel rightPreviewTitleLabel = new JLabel("生成文件预览");
     private final JLabel rightPreviewDetailsLabel = SolidGlassTheme.createHelperLabel("请选择预览表");
+    private final JLabel planPathLabel = SolidGlassTheme.createHelperLabel("选中文件后可查看完整路径");
+    private final GlassButton viewDiffBtn = new GlassButton("查看 Diff");
+    private final GlassButton switchToDbModeBtn = new GlassButton("切换为数据库连接来源");
+    private final GlassButton checkPreviewTableBtn = new GlassButton("勾选此表");
+    private boolean previewParticipates = true;
+    private boolean columnsLoading;
     private final JBTextField outputDirReadOnlyField = new JBTextField();
     private DefaultTableModel filePreviewTableModel;
     private JBTable filePreviewTable;
@@ -297,12 +321,14 @@ public class CodeGenerateDialog extends DialogWrapper {
             tablePrefixesField.setText(Objects.toString(state.tablePrefixes, ""));
             baseEntityField.setText(Objects.toString(state.baseEntityClass, ""));
             feignServiceNameField.setText(Objects.toString(state.feignServiceName, ""));
+            responseWrapperField.setText(Objects.toString(state.responseWrapperClass, ""));
             customLayerModuleRouting.clear();
             if (state.layerModuleRouting != null) {
                 customLayerModuleRouting.putAll(state.layerModuleRouting);
             }
 
             jdbcUrlField.setText(StringUtils.defaultString(state.jdbcUrl));
+            jdbcUrlField.setCaretPosition(0);
             databaseField.setText(StringUtils.defaultString(state.database));
             usernameField.setText(Objects.toString(state.username, "root"));
             passwordField.setText(StringUtils.defaultString(state.retrieveCredential()));
@@ -365,24 +391,25 @@ public class CodeGenerateDialog extends DialogWrapper {
         rootCanvas.setPreferredSize(new Dimension(prefW, prefH));
         rootCanvas.setMinimumSize(new Dimension(JBUI.scale(640), JBUI.scale(420)));
 
-        // 1. 顶栏：左侧品牌标题 + 右侧「中性来源徽标 SourceBadge + 独立验证状态 StatusGlyph + 回滚上次生成 + 导出团队规范 + 切换来源」
+        // 顶栏只留来源和解析结果。回滚、导出、切换来源收进「更多」。
         JPanel sourceAreaRight = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
         sourceAreaRight.setOpaque(false);
         sourceAreaRight.add(sourceBadge);
         sourceAreaRight.add(verificationBadge);
 
         rollbackLastBtn.setToolTipText("一键回滚最近一次代码生成批次（恢复被修改文件，删除新增文件）");
-        rollbackLastBtn.setEnabled(LocalHistoryHelper.hasRollbackableBatch(project));
         rollbackLastBtn.addActionListener(e -> rollbackLastBatchAction());
-        sourceAreaRight.add(rollbackLastBtn);
+        rollbackMenuItem = new JMenuItem("回滚上次生成");
+        rollbackMenuItem.setForeground(SolidGlassTheme.errorFg());
+        rollbackMenuItem.setToolTipText(rollbackLastBtn.getToolTipText());
+        rollbackMenuItem.addActionListener(e -> rollbackLastBatchAction());
 
-        GlassButton exportContractBtn = new GlassButton("导出团队规范");
-        exportContractBtn.setToolTipText("将当前项目的包名、表前缀、基类、Feign服务名、模块路由与自定义模板导出至 .syrobin-codegen.json（不含数据库密码）");
-        exportContractBtn.addActionListener(e -> exportTeamContractAction());
-        sourceAreaRight.add(exportContractBtn);
+        JMenuItem exportItem = new JMenuItem("导出团队规范");
+        exportItem.setToolTipText("将当前项目的包名、表前缀、基类、Feign服务名、模块路由与自定义模板导出至 .syrobin-codegen.json（不含数据库密码）");
+        exportItem.addActionListener(e -> exportTeamContractAction());
 
-        GlassButton switchSourceBtn = new GlassButton("切换来源");
-        switchSourceBtn.addActionListener(e -> {
+        JMenuItem switchSourceItem = new JMenuItem("切换来源");
+        switchSourceItem.addActionListener(e -> {
             databaseConfigVersion++;
             if (currentSourceMode == DataSourceMode.DATABASE) {
                 currentSourceMode = DataSourceMode.OFFLINE_DDL;
@@ -397,7 +424,21 @@ public class CodeGenerateDialog extends DialogWrapper {
             }
             updateSummaryAndSourceIndicators();
         });
-        sourceAreaRight.add(switchSourceBtn);
+
+        JMenuItem convertFeignItem = new JMenuItem("已有接口转 Feign…");
+        convertFeignItem.setToolTipText("选择当前工程已有的 Controller 类或 Service/API 接口，一键转换为 Spring Cloud @FeignClient 接口");
+        convertFeignItem.addActionListener(e -> openConvertExistingInterfaceToFeignDialog());
+
+        JPopupMenu moreMenu = new JPopupMenu();
+        moreMenu.add(switchSourceItem);
+        moreMenu.add(convertFeignItem);
+        moreMenu.add(exportItem);
+        moreMenu.addSeparator();
+        moreMenu.add(rollbackMenuItem);
+        GlassButton moreBtn = new GlassButton("更多");
+        moreBtn.addActionListener(e -> moreMenu.show(moreBtn, moreBtn.getWidth() - moreMenu.getPreferredSize().width, moreBtn.getHeight()));
+        sourceAreaRight.add(moreBtn);
+        syncRollbackEnabled();
 
         JPanel compactHeader = SolidGlassTheme.createCompactHeader(
                 "Syrobin Code Generate",
@@ -409,6 +450,7 @@ public class CodeGenerateDialog extends DialogWrapper {
         // 2. 独立功能页签
         mainTabbedPane = new JBTabbedPane();
         mainTabbedPane.setOpaque(false);
+        SolidGlassTheme.styleTabs(mainTabbedPane);
         mainTabbedPane.setMinimumSize(new Dimension(JBUI.scale(600), JBUI.scale(360)));
         mainTabbedPane.addTab("生成配置与选表", createBasicAndTablePanel());
         mainTabbedPane.addTab("自定义 Query 与主子表", createQueryRulesPanel());
@@ -427,11 +469,19 @@ public class CodeGenerateDialog extends DialogWrapper {
         return rootCanvas;
     }
 
+    private void syncRollbackEnabled() {
+        boolean enabled = LocalHistoryHelper.hasRollbackableBatch(project);
+        rollbackLastBtn.setEnabled(enabled);
+        if (rollbackMenuItem != null) {
+            rollbackMenuItem.setEnabled(enabled);
+        }
+    }
+
     private void rollbackLastBatchAction() {
         LocalHistoryHelper.BatchSnapshot snap = LocalHistoryHelper.peekLastBatch(project);
         if (snap == null) {
             Messages.showInfoMessage(project, CodeGenBundle.message("rollback.empty.message"), "回滚提示");
-            rollbackLastBtn.setEnabled(false);
+            syncRollbackEnabled();
             return;
         }
         int confirm = Messages.showYesNoDialog(
@@ -448,7 +498,7 @@ public class CodeGenerateDialog extends DialogWrapper {
         }
         try {
             int count = LocalHistoryHelper.rollbackLastBatch(project);
-            rollbackLastBtn.setEnabled(LocalHistoryHelper.hasRollbackableBatch(project));
+            syncRollbackEnabled();
             refreshFileImpactPreview();
             Messages.showInfoMessage(
                     project,
@@ -471,11 +521,7 @@ public class CodeGenerateDialog extends DialogWrapper {
         footerSummaryLabel.setFont(UIUtil.getLabelFont().deriveFont(Font.BOLD, JBUI.scaleFontSize(12f)));
         footerSummaryLabel.setForeground(SolidGlassTheme.textPrimary());
 
-        footerOutputPathLabel.setFont(UIUtil.getLabelFont().deriveFont(Font.PLAIN, JBUI.scaleFontSize(11.5f)));
-        footerOutputPathLabel.setForeground(SolidGlassTheme.textMuted());
-
-        panel.add(footerSummaryLabel, BorderLayout.NORTH);
-        panel.add(footerOutputPathLabel, BorderLayout.SOUTH);
+        panel.add(footerSummaryLabel, BorderLayout.CENTER);
         return panel;
     }
 
@@ -498,6 +544,7 @@ public class CodeGenerateDialog extends DialogWrapper {
         tablePrefixesField.getDocument().addDocumentListener(liveSummaryListener);
         baseEntityField.getDocument().addDocumentListener(liveSummaryListener);
         feignServiceNameField.getDocument().addDocumentListener(liveSummaryListener);
+        responseWrapperField.getDocument().addDocumentListener(liveSummaryListener);
 
         styleTextField(authorField);
         styleTextField(packageField);
@@ -507,22 +554,18 @@ public class CodeGenerateDialog extends DialogWrapper {
         styleTextField(tablePrefixesField);
         styleTextField(baseEntityField);
         styleTextField(feignServiceNameField);
+        styleTextField(responseWrapperField);
 
-        moduleField.getEmptyText().setText("例如：article（输出包名 = 基础包名.模块名）");
-        fixedEnumField.getEmptyText().setText("可选：例如 status");
-        tablePrefixesField.getEmptyText().setText("可选：如 t_,sys_,biz_（类名自动剥离前缀）");
-        baseEntityField.getEmptyText().setText("可选：如 com.example.common.BaseEntity（自动忽略公共审计列）");
-        feignServiceNameField.getEmptyText().setText("可选：如 order-service（留空默认按 模块名-service 生成）");
+        moduleField.getEmptyText().setText("article");
+        fixedEnumField.getEmptyText().setText("status");
+        tablePrefixesField.getEmptyText().setText("t_,sys_");
+        baseEntityField.getEmptyText().setText("com.example.common.BaseEntity");
+        feignServiceNameField.getEmptyText().setText("order-service");
+        responseWrapperField.getEmptyText().setText("com.example.common.Result");
+        authorField.getEmptyText().setText("syrobin");
 
         selectedTablesReadOnlyField.setEditable(false);
-        selectedTablesReadOnlyField.getEmptyText().setText("尚未勾选表（请在下方左侧列表勾选）");
-
-        JPanel selectedTablesBox = new JPanel(new BorderLayout(6, 0));
-        selectedTablesBox.setOpaque(false);
-        selectedTablesBox.add(selectedTablesReadOnlyField, BorderLayout.CENTER);
-        GlassButton manualAddTableBtn = new GlassButton("+ 手动添加表");
-        manualAddTableBtn.addActionListener(e -> promptManualAddTables());
-        selectedTablesBox.add(manualAddTableBtn, BorderLayout.EAST);
+        selectedTablesReadOnlyField.getEmptyText().setText("尚未勾选表");
 
         writeStrategyCombo.addActionListener(e -> {
             updateWriteStrategyHint();
@@ -536,67 +579,37 @@ public class CodeGenerateDialog extends DialogWrapper {
         });
         enableValidationCheckBox.addActionListener(e -> refreshFileImpactPreview());
 
-        // 1. 双列紧凑表单
-        SolidGlassPanel formCard = new SolidGlassPanel(new GridBagLayout(), Thickness.MEDIUM);
+        JPanel commonForm = new JPanel(new GridBagLayout());
+        commonForm.setOpaque(false);
         GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = JBUI.insets(2, 6, 2, 6);
+        gbc.insets = JBUI.insets(2, 0, 2, 6);
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.anchor = GridBagConstraints.WEST;
-
-        addGridPair(formCard, gbc, 0,
-                "作者名称:", authorField,
-                "模块名称:", moduleField);
-
-        addGridPair(formCard, gbc, 1,
-                "基础包名:", packageField,
-                "已选生成表:", selectedTablesBox);
-
-        addGridPair(formCard, gbc, 2,
-                "表前缀剥离:", tablePrefixesField,
-                "实体公共基类:", baseEntityField);
-
-        JPanel enumBox = new JPanel(new BorderLayout(0, 2));
-        enumBox.setOpaque(false);
-        enumBox.add(fixedEnumField, BorderLayout.NORTH);
-        enumBox.add(SolidGlassTheme.createHelperLabel("留空生成所有含括号键值注释的列；填写列名仅生成该列"), BorderLayout.SOUTH);
+        addFormRow(commonForm, gbc, 0, "基础包名:", packageField);
+        addFormRow(commonForm, gbc, 1, "模块名称:", moduleField);
 
         JPanel writeStrategyBox = new JPanel(new BorderLayout(0, 2));
         writeStrategyBox.setOpaque(false);
         writeStrategyBox.add(writeStrategyCombo, BorderLayout.NORTH);
         writeStrategyBox.add(writeStrategyHintLabel, BorderLayout.SOUTH);
+        addFormRow(commonForm, gbc, 2, "文件写入方式:", writeStrategyBox);
 
-        addGridPair(formCard, gbc, 3,
-                "限定枚举列:", enumBox,
-                "文件写入方式:", writeStrategyBox);
+        JPanel targetsPanel = new JPanel(new BorderLayout(0, 6));
+        targetsPanel.setOpaque(false);
+        targetsPanel.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(1, 0, 0, 0, SolidGlassTheme.borderColor()),
+                JBUI.Borders.empty(8, 0, 0, 0)));
 
-        enableValidationCheckBox.setOpaque(false);
-        enableValidationCheckBox.setForeground(SolidGlassTheme.textPrimary());
-        addGridPair(formCard, gbc, 4,
-                "文档注解:", docStyleCombo,
-                "校验注解:", enableValidationCheckBox);
-
-        addGridPair(formCard, gbc, 5,
-                "对象转换策略:", mapperStrategyCombo,
-                "Feign 服务名:", feignServiceNameField);
-
-        // 2. 生成模型与技术栈选项区（含多模块微服务路由 & 已有接口转 FeignClient 按钮）
-        SolidGlassPanel targetsCard = new SolidGlassPanel(new BorderLayout(0, 6), Thickness.MEDIUM);
-
-        JPanel targetsHeader = new JPanel(new BorderLayout());
-        targetsHeader.setOpaque(false);
-        targetSelectionCountLabel.setFont(UIUtil.getLabelFont().deriveFont(Font.BOLD, JBUI.scaleFontSize(12f)));
-        targetSelectionCountLabel.setForeground(SolidGlassTheme.textPrimary());
-
-        JPanel quickBtnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
-        quickBtnPanel.setOpaque(false);
-
-        GlassButton convertFeignBtn = new GlassButton("已有接口转 Feign...");
-        convertFeignBtn.setToolTipText("选择当前工程已有的 Controller 类或 Service/API 接口，一键转换为 Spring Cloud @FeignClient 接口");
-        convertFeignBtn.addActionListener(e -> openConvertExistingInterfaceToFeignDialog());
-
-        GlassButton moduleRouteBtn = new GlassButton("多模块路由...");
-        moduleRouteBtn.setToolTipText("为 Entity/Mapper、BO/VO/Query、Service、Controller、FeignClient 分别指定不同的 Maven/Gradle 子模块输出目录");
-        moduleRouteBtn.addActionListener(e -> openMultiModuleRoutingDialog());
+        GlassButton presetBtn = new GlassButton("应用预设");
+        JPopupMenu presetMenu = new JPopupMenu();
+        JMenuItem queryPreset = new JMenuItem("仅 Query");
+        queryPreset.addActionListener(e -> applyTargetPreset("entityQuery", "serviceQuery"));
+        JMenuItem feignPreset = new JMenuItem("Feign 契约");
+        feignPreset.setToolTipText("勾选 FeignClient 接口、Entity BO、Entity VO、Entity Query");
+        feignPreset.addActionListener(e -> applyTargetPreset("feignClient", "entityBO", "entityVO", "entityQuery"));
+        presetMenu.add(queryPreset);
+        presetMenu.add(feignPreset);
+        presetBtn.addActionListener(e -> presetMenu.show(presetBtn, 0, presetBtn.getHeight()));
 
         GlassButton selectAllBtn = new GlassButton("全选");
         selectAllBtn.addActionListener(e -> {
@@ -610,79 +623,266 @@ public class CodeGenerateDialog extends DialogWrapper {
             updateSummaryAndSourceIndicators();
             refreshFileImpactPreview();
         });
-        GlassButton feignPresetBtn = new GlassButton("Feign 契约预设");
-        feignPresetBtn.setToolTipText("一键勾选 FeignClient 接口 + EntityBO + EntityVO + EntityQuery");
-        feignPresetBtn.addActionListener(e -> {
-            targetCheckBoxes.values().forEach(cb -> cb.setSelected(false));
-            targetCheckBoxes.get("feignClient").setSelected(true);
-            targetCheckBoxes.get("entityBO").setSelected(true);
-            targetCheckBoxes.get("entityVO").setSelected(true);
-            targetCheckBoxes.get("entityQuery").setSelected(true);
-            updateSummaryAndSourceIndicators();
-            refreshFileImpactPreview();
+
+        JPanel batchButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        batchButtons.setOpaque(false);
+        batchButtons.add(presetBtn);
+        batchButtons.add(selectAllBtn);
+        batchButtons.add(clearAllBtn);
+
+        JPanel groups = new JPanel();
+        groups.setOpaque(false);
+        groups.setLayout(new BoxLayout(groups, BoxLayout.Y_AXIS));
+        groups.setVisible(false);
+        batchButtons.remove(presetBtn);
+        groups.add(batchButtons);
+        groups.add(Box.createVerticalStrut(JBUI.scale(6)));
+        groups.add(createTargetGroup("实体",
+                "entity", "Entity 实体",
+                "entityBO", "Entity BO",
+                "entityVO", "Entity VO",
+                "entityQuery", "Entity Query",
+                "enums", "Enum 枚举"));
+        groups.add(createTargetGroup("持久层",
+                "mapper", "Mapper 接口",
+                "mapperXml", "Mapper XML",
+                "excelDto", "EasyExcel DTO",
+                "converter", "MapStruct"));
+        groups.add(createTargetGroup("服务",
+                "service", "Service",
+                "serviceQuery", "ServiceQuery",
+                "serviceResults", "ServiceResults"));
+        groups.add(createTargetGroup("接口",
+                "controller", "Controller",
+                "feignClient", "FeignClient"));
+        groups.add(createTargetGroup("其它",
+                "frontendApi", "前端 TS",
+                "frontendVue", "Vue3 页面",
+                "httpClient", "HTTP Client",
+                "unitTest", "JUnit5",
+                "flywayMigration", "Flyway"));
+
+        targetsToggleBtn = createDisclosureButton();
+        targetsToggleBtn.addActionListener(e -> {
+            targetsExpanded = !targetsExpanded;
+            groups.setVisible(targetsExpanded);
+            updateTargetsToggleLabel();
+            mainPanel.revalidate();
         });
-        GlassButton queryOnlyBtn = new GlassButton("仅 Query 预设");
-        queryOnlyBtn.addActionListener(e -> {
-            targetCheckBoxes.values().forEach(cb -> cb.setSelected(false));
-            targetCheckBoxes.get("entityQuery").setSelected(true);
-            targetCheckBoxes.get("serviceQuery").setSelected(true);
-            updateSummaryAndSourceIndicators();
-            refreshFileImpactPreview();
+        GlassButton editTargetsBtn = new GlassButton("编辑");
+        editTargetsBtn.addActionListener(e -> targetsToggleBtn.doClick());
+        targetsEditBtn = editTargetsBtn;
+
+        JPanel targetsHeaderActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        targetsHeaderActions.setOpaque(false);
+        targetsHeaderActions.add(presetBtn);
+        targetsHeaderActions.add(editTargetsBtn);
+
+        JPanel targetsHeader = new JPanel(new BorderLayout(8, 0));
+        targetsHeader.setOpaque(false);
+        targetsHeader.add(targetsToggleBtn, BorderLayout.CENTER);
+        targetsHeader.add(targetsHeaderActions, BorderLayout.EAST);
+
+        targetsPanel.add(targetsHeader, BorderLayout.NORTH);
+        targetsPanel.add(groups, BorderLayout.CENTER);
+
+        JPanel advancedBody = new JPanel(new GridBagLayout());
+        advancedBody.setOpaque(false);
+        advancedBody.setVisible(false);
+        GridBagConstraints advancedGbc = new GridBagConstraints();
+        advancedGbc.insets = JBUI.insets(2, 0, 2, 6);
+        advancedGbc.fill = GridBagConstraints.HORIZONTAL;
+        advancedGbc.anchor = GridBagConstraints.WEST;
+        enableValidationCheckBox.setOpaque(false);
+        enableValidationCheckBox.setForeground(SolidGlassTheme.textPrimary());
+        addFormRow(advancedBody, advancedGbc, 0, "作者名称:", authorField);
+        addFormRow(advancedBody, advancedGbc, 1, "表前缀剥离:", tablePrefixesField);
+        addFormRow(advancedBody, advancedGbc, 2, "实体公共基类:", baseEntityField);
+        addFormRow(advancedBody, advancedGbc, 3, "限定枚举列:", fixedEnumField);
+        addFormRow(advancedBody, advancedGbc, 4, "文档注解:", docStyleCombo);
+        addFormRow(advancedBody, advancedGbc, 5, "对象转换策略:", mapperStrategyCombo);
+        addFormRow(advancedBody, advancedGbc, 6, "校验注解:", enableValidationCheckBox);
+        addFormRow(advancedBody, advancedGbc, 7, "Feign 服务名:", feignServiceNameField);
+        addFormRow(advancedBody, advancedGbc, 8, "统一响应包装:", responseWrapperField);
+
+        advancedToggleBtn = createDisclosureButton();
+        advancedToggleBtn.addActionListener(e -> {
+            advancedExpanded = !advancedExpanded;
+            advancedBody.setVisible(advancedExpanded);
+            updateAdvancedToggleLabel();
+            mainPanel.revalidate();
         });
-        quickBtnPanel.add(convertFeignBtn);
-        quickBtnPanel.add(moduleRouteBtn);
-        quickBtnPanel.add(feignPresetBtn);
-        quickBtnPanel.add(selectAllBtn);
-        quickBtnPanel.add(clearAllBtn);
-        quickBtnPanel.add(queryOnlyBtn);
+        JPanel advancedWrap = new JPanel(new BorderLayout(0, 4));
+        advancedWrap.setOpaque(false);
+        advancedWrap.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(1, 0, 0, 0, SolidGlassTheme.borderColor()),
+                JBUI.Borders.empty(8, 0, 0, 0)));
+        advancedWrap.add(advancedToggleBtn, BorderLayout.NORTH);
+        advancedWrap.add(advancedBody, BorderLayout.CENTER);
 
-        targetsHeader.add(targetSelectionCountLabel, BorderLayout.CENTER);
-        targetsHeader.add(quickBtnPanel, BorderLayout.EAST);
-        targetSelectionCountLabel.setMinimumSize(new Dimension(0, 0));
+        JPanel configColumn = new JPanel(new BorderLayout(0, 8));
+        configColumn.setOpaque(false);
+        configColumn.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(1, 0, 0, 0, SolidGlassTheme.borderColor()),
+                JBUI.Borders.empty(8, 0, 0, 4)));
+        JPanel configTop = new JPanel(new BorderLayout(0, 8));
+        configTop.setOpaque(false);
+        configTop.add(commonForm, BorderLayout.NORTH);
+        configTop.add(targetsPanel, BorderLayout.CENTER);
+        configTop.add(advancedWrap, BorderLayout.SOUTH);
+        configColumn.add(configTop, BorderLayout.NORTH);
+        JBScrollPane configScroll = new JBScrollPane(configColumn);
+        configScroll.setBorder(JBUI.Borders.empty());
+        configScroll.setOpaque(false);
+        configScroll.getViewport().setOpaque(false);
+        configScroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        configScroll.setMinimumSize(new Dimension(JBUI.scale(260), JBUI.scale(120)));
 
-        JPanel checkGrid = new JPanel(new GridLayout(3, 5, 6, 4));
-        checkGrid.setOpaque(false);
-        registerTargetCheckBox(checkGrid, "entity", "Entity 实体");
-        registerTargetCheckBox(checkGrid, "entityBO", "Entity BO");
-        registerTargetCheckBox(checkGrid, "entityVO", "Entity VO");
-        registerTargetCheckBox(checkGrid, "entityQuery", "Entity Query");
-        registerTargetCheckBox(checkGrid, "enums", "Enum 枚举 (按列)");
-        registerTargetCheckBox(checkGrid, "mapper", "Mapper 接口");
-        registerTargetCheckBox(checkGrid, "mapperXml", "Mapper XML");
-        registerTargetCheckBox(checkGrid, "converter", "MapStruct 转换器");
-        registerTargetCheckBox(checkGrid, "service", "Service (接口+Impl)");
-        registerTargetCheckBox(checkGrid, "serviceQuery", "ServiceQuery");
-        registerTargetCheckBox(checkGrid, "serviceResults", "ServiceResults");
-        registerTargetCheckBox(checkGrid, "controller", "Controller");
-        registerTargetCheckBox(checkGrid, "feignClient", "FeignClient 接口");
-        registerTargetCheckBox(checkGrid, "frontendApi", "前端 TS/Axios");
+        JPanel tableCard = createLeftTableSelectionCard();
+        tableCard.setMinimumSize(new Dimension(JBUI.scale(260), JBUI.scale(170)));
+        JSplitPane leftSplit = SolidGlassTheme.createCleanSplitPane(
+                JSplitPane.VERTICAL_SPLIT,
+                tableCard,
+                configScroll,
+                JBUI.scale(280),
+                0.55
+        );
+        leftSplit.setMinimumSize(new Dimension(JBUI.scale(280), JBUI.scale(300)));
 
-        targetsCard.add(targetsHeader, BorderLayout.NORTH);
-        targetsCard.add(checkGrid, BorderLayout.CENTER);
-
-        JPanel topCombined = new JPanel(new BorderLayout(0, 8));
-        topCombined.setOpaque(false);
-        topCombined.setMinimumSize(new Dimension(JBUI.scale(560), JBUI.scale(180)));
-        topCombined.add(formCard, BorderLayout.NORTH);
-        topCombined.add(targetsCard, BorderLayout.CENTER);
-
-        // 3. 底部左右分栏
-        SolidGlassPanel leftTableCard = createLeftTableSelectionCard();
         SolidGlassPanel rightPreviewCard = createRightFilePreviewCard();
-
-        JSplitPane bottomSplit = SolidGlassTheme.createCleanSplitPane(
+        rightPreviewCard.setMinimumSize(new Dimension(JBUI.scale(280), JBUI.scale(160)));
+        workbenchSplit = SolidGlassTheme.createCleanSplitPane(
                 JSplitPane.HORIZONTAL_SPLIT,
-                leftTableCard,
+                leftSplit,
                 rightPreviewCard,
-                360,
+                400,
                 0.42
         );
-        bottomSplit.setMinimumSize(new Dimension(JBUI.scale(560), JBUI.scale(150)));
+        workbenchSplit.setMinimumSize(new Dimension(JBUI.scale(560), JBUI.scale(220)));
 
         mainPanel.setMinimumSize(new Dimension(JBUI.scale(580), JBUI.scale(340)));
-        mainPanel.add(topCombined, BorderLayout.NORTH);
-        mainPanel.add(bottomSplit, BorderLayout.CENTER);
+        mainPanel.add(workbenchSplit, BorderLayout.CENTER);
+        mainPanel.addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent e) {
+                if (workbenchSplit == null || mainPanel.getWidth() <= 0) {
+                    return;
+                }
+                boolean stack = mainPanel.getWidth() < JBUI.scale(780);
+                int orientation = stack ? JSplitPane.VERTICAL_SPLIT : JSplitPane.HORIZONTAL_SPLIT;
+                if (workbenchSplit.getOrientation() != orientation) {
+                    workbenchSplit.setOrientation(orientation);
+                    workbenchSplit.setResizeWeight(stack ? 0.5 : 0.42);
+                    mainPanel.revalidate();
+                }
+            }
+        });
         return mainPanel;
+    }
+
+    private void applyTargetPreset(String... keys) {
+        targetCheckBoxes.values().forEach(cb -> cb.setSelected(false));
+        for (String key : keys) {
+            JBCheckBox box = targetCheckBoxes.get(key);
+            if (box != null) {
+                box.setSelected(true);
+            }
+        }
+        updateSummaryAndSourceIndicators();
+        refreshFileImpactPreview();
+    }
+
+    private void updateAdvancedToggleLabel() {
+        if (advancedToggleBtn == null) {
+            return;
+        }
+        int customized = customizedAdvancedCount();
+        String suffix = customized > 0 ? " · 已改 " + customized + " 项" : "";
+        advancedToggleBtn.setText("高级配置" + suffix);
+        advancedToggleBtn.setIcon(advancedExpanded ? AllIcons.General.ArrowDown : AllIcons.General.ArrowRight);
+    }
+
+    private void updateTargetsToggleLabel() {
+        if (targetsToggleBtn == null) {
+            return;
+        }
+        long selected = targetCheckBoxes.values().stream().filter(AbstractButton::isSelected).count();
+        targetsToggleBtn.setText("生成目标 " + selected + " / " + targetCheckBoxes.size());
+        targetsToggleBtn.setIcon(targetsExpanded ? AllIcons.General.ArrowDown : AllIcons.General.ArrowRight);
+        targetsToggleBtn.setToolTipText(targetsSummaryTooltip);
+        targetsEditBtn.setText(targetsExpanded ? "收起" : "编辑");
+    }
+
+    private JButton createDisclosureButton() {
+        JButton button = new SolidGlassTheme.FlatButton(null, AllIcons.General.ArrowRight);
+        button.setHorizontalAlignment(SwingConstants.LEFT);
+        button.setIconTextGap(JBUI.scale(6));
+        button.setBorder(JBUI.Borders.empty(4, 0));
+        button.setFont(UIUtil.getLabelFont().deriveFont(Font.BOLD, JBUI.scaleFontSize(12f)));
+        return button;
+    }
+
+    private int customizedAdvancedCount() {
+        int count = 0;
+        if (StringUtils.isNotBlank(tablePrefixesField.getText())) {
+            count++;
+        }
+        if (StringUtils.isNotBlank(baseEntityField.getText())) {
+            count++;
+        }
+        if (StringUtils.isNotBlank(fixedEnumField.getText())) {
+            count++;
+        }
+        if (StringUtils.isNotBlank(feignServiceNameField.getText())) {
+            count++;
+        }
+        if (StringUtils.isNotBlank(responseWrapperField.getText())) {
+            count++;
+        }
+        if (StringUtils.isNotBlank(authorField.getText()) && !"syrobin".equals(authorField.getText().trim())) {
+            count++;
+        }
+        if (docStyleCombo.getSelectedIndex() >= 0 && docStyleCombo.getSelectedIndex() != 2) {
+            count++;
+        }
+        if (mapperStrategyCombo.getSelectedIndex() > 0) {
+            count++;
+        }
+        if (!enableValidationCheckBox.isSelected()) {
+            count++;
+        }
+        return count;
+    }
+
+    private JPanel createTargetGroup(String title, String... keysAndLabels) {
+        JPanel row = new JPanel(new BorderLayout(8, 0));
+        row.setOpaque(false);
+        row.setBorder(JBUI.Borders.emptyBottom(8));
+        JLabel titleLabel = new JLabel(title);
+        titleLabel.setForeground(SolidGlassTheme.textMuted());
+        titleLabel.setFont(UIUtil.getLabelFont().deriveFont(Font.PLAIN, JBUI.scaleFontSize(11.5f)));
+        titleLabel.setPreferredSize(new Dimension(JBUI.scale(48), JBUI.scale(22)));
+        titleLabel.setVerticalAlignment(SwingConstants.TOP);
+        JPanel checks = new JPanel(new GridLayout(0, 2, 6, 2));
+        checks.setOpaque(false);
+        for (int i = 0; i < keysAndLabels.length; i += 2) {
+            registerTargetCheckBox(checks, keysAndLabels[i], keysAndLabels[i + 1]);
+        }
+        row.add(titleLabel, BorderLayout.WEST);
+        row.add(checks, BorderLayout.CENTER);
+        return row;
+    }
+
+    private void addFormRow(JPanel panel, GridBagConstraints gbc, int row, String label, JComponent field) {
+        gbc.gridy = row;
+        gbc.gridx = 0;
+        gbc.weightx = 0;
+        JBLabel name = new JBLabel(label);
+        name.setForeground(SolidGlassTheme.textPrimary());
+        panel.add(name, gbc);
+        gbc.gridx = 1;
+        gbc.weightx = 1;
+        panel.add(field, gbc);
     }
 
     /**
@@ -787,7 +987,7 @@ public class CodeGenerateDialog extends DialogWrapper {
                 VfsUtil.markDirtyAndRefresh(true, true, true, vf);
             }
 
-            rollbackLastBtn.setEnabled(LocalHistoryHelper.hasRollbackableBatch(project));
+            syncRollbackEnabled();
             if (previewDiffBox.isSelected()) {
                 IncrementalCodeMerger.openSingleFilePreviewDiff(project, targetFile.getAbsolutePath(), feignCode, strategy);
             } else {
@@ -827,15 +1027,19 @@ public class CodeGenerateDialog extends DialogWrapper {
         field.setForeground(SolidGlassTheme.textPrimary());
     }
 
-    private SolidGlassPanel createLeftTableSelectionCard() {
-        SolidGlassPanel card = new SolidGlassPanel(new BorderLayout(0, 6), Thickness.MEDIUM);
+    private JPanel createLeftTableSelectionCard() {
+        JPanel card = new JPanel(new BorderLayout(0, 6));
+        card.setOpaque(false);
+        card.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(1, 0, 0, 0, SolidGlassTheme.borderColor()),
+                JBUI.Borders.empty(8, 0, 0, 0)));
 
-        JPanel headerRow = new JPanel(new BorderLayout());
+        JPanel headerRow = new JPanel(new BorderLayout(0, 4));
         headerRow.setOpaque(false);
         leftTablePanelTitleLabel.setFont(UIUtil.getLabelFont().deriveFont(Font.BOLD, JBUI.scaleFontSize(12f)));
         leftTablePanelTitleLabel.setForeground(SolidGlassTheme.textPrimary());
 
-        JPanel checkAllBar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        JPanel checkAllBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         checkAllBar.setOpaque(false);
         GlassButton checkAllTablesBtn = new GlassButton("全选表");
         checkAllTablesBtn.addActionListener(e -> {
@@ -853,11 +1057,14 @@ public class CodeGenerateDialog extends DialogWrapper {
             tableJList.repaint();
             syncCheckedTablesToSummaryField();
         });
+        GlassButton manualAddTableBtn = new GlassButton("+ 手动添加表");
+        manualAddTableBtn.addActionListener(e -> promptManualAddTables());
+        checkAllBar.add(manualAddTableBtn);
         checkAllBar.add(checkAllTablesBtn);
         checkAllBar.add(uncheckAllTablesBtn);
 
-        headerRow.add(leftTablePanelTitleLabel, BorderLayout.WEST);
-        headerRow.add(checkAllBar, BorderLayout.EAST);
+        headerRow.add(leftTablePanelTitleLabel, BorderLayout.NORTH);
+        headerRow.add(checkAllBar, BorderLayout.SOUTH);
 
         JPanel filterToolbar = new JPanel(new BorderLayout(6, 0));
         filterToolbar.setOpaque(false);
@@ -909,6 +1116,7 @@ public class CodeGenerateDialog extends DialogWrapper {
                 syncCheckedTablesToSummaryField();
                 reloadQueryTablesForCurrentTable();
                 refreshFileImpactPreview();
+                readActiveTableColumnsIfMissing();
             }
         });
 
@@ -934,7 +1142,7 @@ public class CodeGenerateDialog extends DialogWrapper {
             checkBox.setOpaque(false);
             nameLabel.setFont(UIUtil.getLabelFont().deriveFont(Font.PLAIN, JBUI.scaleFontSize(12f)));
             previewBadge.setFont(UIUtil.getLabelFont().deriveFont(Font.BOLD, JBUI.scaleFontSize(10.5f)));
-            previewBadge.setForeground(SolidGlassTheme.selectedFg());
+            previewBadge.setForeground(SolidGlassTheme.textMuted());
 
             JPanel left = new JPanel(new BorderLayout(4, 0));
             left.setOpaque(false);
@@ -958,8 +1166,8 @@ public class CodeGenerateDialog extends DialogWrapper {
 
             if (isPreviewActive) {
                 setOpaque(true);
-                setBackground(SolidGlassTheme.selectedBg());
-                nameLabel.setForeground(SolidGlassTheme.selectedFg());
+                setBackground(SolidGlassTheme.hoverBg());
+                nameLabel.setForeground(SolidGlassTheme.textPrimary());
                 nameLabel.setFont(UIUtil.getLabelFont().deriveFont(Font.BOLD, JBUI.scaleFontSize(12f)));
             } else if (value.isChecked()) {
                 setOpaque(true);
@@ -979,14 +1187,14 @@ public class CodeGenerateDialog extends DialogWrapper {
         protected void paintComponent(Graphics g) {
             super.paintComponent(g);
             if (isPreviewActive) {
-                g.setColor(SolidGlassTheme.selectedFg());
+                g.setColor(SolidGlassTheme.textMuted());
                 g.fillRect(0, 2, JBUI.scale(3), getHeight() - 4);
             }
         }
     }
 
     private SolidGlassPanel createRightFilePreviewCard() {
-        SolidGlassPanel card = new SolidGlassPanel(new BorderLayout(0, 6), Thickness.MEDIUM);
+        SolidGlassPanel card = new SolidGlassPanel(new BorderLayout(0, 6), Thickness.THICK);
 
         JPanel headerRow = new JPanel(new BorderLayout());
         headerRow.setOpaque(false);
@@ -995,49 +1203,86 @@ public class CodeGenerateDialog extends DialogWrapper {
 
         rightPreviewTitleLabel.setMinimumSize(new Dimension(0, 0));
         GlassButton refreshPreviewBtn = new GlassButton("刷新预览");
-        refreshPreviewBtn.setToolTipText("重新读取字段并更新生成文件预览（双击下方文件行可打开单文件实时 Diff 预演）");
+        refreshPreviewBtn.setToolTipText("重新读取字段并更新生成计划。选中一行后可查看 Diff");
         refreshPreviewBtn.addActionListener(e -> previewSelectedTableEnumsAsync());
 
         ((BorderLayout) headerRow.getLayout()).setHgap(JBUI.scale(8));
         headerRow.add(rightPreviewTitleLabel, BorderLayout.CENTER);
         headerRow.add(refreshPreviewBtn, BorderLayout.EAST);
 
+        checkPreviewTableBtn.setVisible(false);
+        checkPreviewTableBtn.addActionListener(e -> {
+            TableItem item = masterTableMap.get(activePreviewTableName);
+            if (item != null) {
+                item.setChecked(true);
+                tableJList.repaint();
+                syncCheckedTablesToSummaryField();
+            }
+        });
+        JPanel summaryText = new JPanel(new GridLayout(2, 1, 0, 2));
+        summaryText.setOpaque(false);
+        summaryText.add(rightPreviewDetailsLabel);
+        summaryText.add(fieldParseSummaryLabel);
+        JPanel summaryRow = new JPanel(new BorderLayout(8, 0));
+        summaryRow.setOpaque(false);
+        summaryRow.add(summaryText, BorderLayout.CENTER);
+        summaryRow.add(checkPreviewTableBtn, BorderLayout.EAST);
+
         JPanel previewHeading = new JPanel(new BorderLayout(0, 4));
         previewHeading.setOpaque(false);
         previewHeading.add(headerRow, BorderLayout.NORTH);
-        previewHeading.add(rightPreviewDetailsLabel, BorderLayout.SOUTH);
+        previewHeading.add(summaryRow, BorderLayout.SOUTH);
 
-        JPanel outputDirRow = new JPanel(new BorderLayout(6, 0));
-        outputDirRow.setOpaque(false);
-        styleTextField(outputDirReadOnlyField);
+        viewDiffBtn.setToolTipText("打开选中文件的 Diff。也可以在列表中按 Enter");
+        viewDiffBtn.setEnabled(false);
+        viewDiffBtn.addActionListener(e -> openSelectedPreviewDiff());
+
         outputDirReadOnlyField.setEditable(false);
-        outputDirReadOnlyField.setForeground(SolidGlassTheme.textMuted());
+        outputDirReadOnlyField.setOpaque(false);
+        outputDirReadOnlyField.setBorder(JBUI.Borders.empty());
+        outputDirReadOnlyField.setForeground(SolidGlassTheme.textPrimary());
         outputDirReadOnlyField.setFont(new Font(Font.MONOSPACED, Font.PLAIN, JBUI.scaleFontSize(11.5f)));
 
-        GlassButton copyDirBtn = new GlassButton("复制路径");
+        JButton copyDirBtn = new SolidGlassTheme.FlatButton(null, AllIcons.Actions.Copy);
+        copyDirBtn.setToolTipText("复制路径");
+        copyDirBtn.getAccessibleContext().setAccessibleName("复制路径");
         copyDirBtn.addActionListener(e -> {
             String dirText = outputDirReadOnlyField.getText();
             if (StringUtils.isNotBlank(dirText)) {
                 Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(dirText), null);
-                copyDirBtn.setText("已复制 ✓");
-                javax.swing.Timer t = new javax.swing.Timer(1200, ev -> copyDirBtn.setText("复制路径"));
-                t.setRepeats(false);
-                t.start();
+                copyDirBtn.setToolTipText("已复制");
             }
         });
 
-        JBLabel outDirLabel = new JBLabel("输出目录:");
-        outDirLabel.setForeground(SolidGlassTheme.textSecondary());
+        GlassButton moduleRouteBtn = new GlassButton("多模块路由");
+        moduleRouteBtn.setToolTipText("为 Entity/Mapper、BO/VO/Query、Service、Controller、FeignClient 分别指定不同的 Maven/Gradle 子模块输出目录");
+        moduleRouteBtn.addActionListener(e -> openMultiModuleRoutingDialog());
+
+        JPanel outputActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        outputActions.setOpaque(false);
+        outputActions.add(copyDirBtn);
+        outputActions.add(moduleRouteBtn);
+
+        JBLabel outDirLabel = new JBLabel("输出到");
+        outDirLabel.setForeground(SolidGlassTheme.textMuted());
+        JPanel outputDirRow = new JPanel(new BorderLayout(6, 0));
+        outputDirRow.setOpaque(false);
         outputDirRow.add(outDirLabel, BorderLayout.WEST);
         outputDirRow.add(outputDirReadOnlyField, BorderLayout.CENTER);
-        outputDirRow.add(copyDirBtn, BorderLayout.EAST);
+        outputDirRow.add(outputActions, BorderLayout.EAST);
 
-        JPanel northBox = new JPanel(new BorderLayout(0, 5));
-        northBox.setOpaque(false);
-        northBox.add(previewHeading, BorderLayout.NORTH);
-        northBox.add(outputDirRow, BorderLayout.SOUTH);
+        JPanel detailBar = new JPanel(new BorderLayout(6, 0));
+        detailBar.setOpaque(false);
+        planPathLabel.setMinimumSize(new Dimension(0, 0));
+        detailBar.add(planPathLabel, BorderLayout.CENTER);
+        detailBar.add(viewDiffBtn, BorderLayout.EAST);
 
-        filePreviewTableModel = new DefaultTableModel(new Object[]{"文件路径（双击可打开 Diff 预演）", "处理方式"}, 0) {
+        JPanel northStack = new JPanel(new BorderLayout(0, 6));
+        northStack.setOpaque(false);
+        northStack.add(previewHeading, BorderLayout.NORTH);
+        northStack.add(outputDirRow, BorderLayout.SOUTH);
+
+        filePreviewTableModel = new DefaultTableModel(new Object[]{"文件路径", "处理方式"}, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
                 return false;
@@ -1047,13 +1292,49 @@ public class CodeGenerateDialog extends DialogWrapper {
         filePreviewTable.setBackground(SolidGlassTheme.inputBg());
         filePreviewTable.setForeground(SolidGlassTheme.textPrimary());
         filePreviewTable.setGridColor(SolidGlassTheme.borderColor());
-        filePreviewTable.setSelectionBackground(SolidGlassTheme.selectedBg());
-        filePreviewTable.setSelectionForeground(SolidGlassTheme.selectedFg());
+        filePreviewTable.setSelectionBackground(SolidGlassTheme.hoverBg());
+        filePreviewTable.setSelectionForeground(SolidGlassTheme.textPrimary());
         filePreviewTable.setRowHeight(JBUI.scale(23));
         filePreviewTable.setFont(new Font(Font.MONOSPACED, Font.PLAIN, JBUI.scaleFontSize(11.5f)));
         filePreviewTable.getColumnModel().getColumn(0).setPreferredWidth(305);
         filePreviewTable.getColumnModel().getColumn(1).setPreferredWidth(145);
-        filePreviewTable.getEmptyText().setText("请在左侧选择表以预览即将生成的文件及处理方式");
+        filePreviewTable.getEmptyText().setText("勾选表后，这里列出将写入的文件");
+        filePreviewTable.getColumnModel().getColumn(0).setCellRenderer(new DefaultTableCellRenderer() {
+            @Override
+            public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
+                String full = Objects.toString(value, "");
+                int slash = Math.max(full.lastIndexOf('/'), full.lastIndexOf('\\'));
+                String name = slash >= 0 && slash < full.length() - 1 ? full.substring(slash + 1) : full;
+                JLabel label = (JLabel) super.getTableCellRendererComponent(table, name, isSelected, hasFocus, row, column);
+                label.setToolTipText(full);
+                if (!isSelected) {
+                    label.setBackground(SolidGlassTheme.inputBg());
+                    label.setForeground(previewParticipates ? SolidGlassTheme.textPrimary() : SolidGlassTheme.textMuted());
+                }
+                return label;
+            }
+        });
+        filePreviewTable.getSelectionModel().addListSelectionListener(e -> {
+            if (e.getValueIsAdjusting() || filePreviewTableModel == null) {
+                return;
+            }
+            int row = filePreviewTable.getSelectedRow();
+            if (row < 0 || row >= filePreviewTableModel.getRowCount()) {
+                planPathLabel.setText("选中文件后可查看完整路径");
+                viewDiffBtn.setEnabled(false);
+                return;
+            }
+            planPathLabel.setText(Objects.toString(filePreviewTableModel.getValueAt(row, 0), ""));
+            viewDiffBtn.setEnabled(row < previewRowAbsolutePaths.size() && StringUtils.isNotBlank(previewRowAbsolutePaths.get(row)));
+        });
+        filePreviewTable.getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+                .put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "viewDiff");
+        filePreviewTable.getActionMap().put("viewDiff", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                openSelectedPreviewDiff();
+            }
+        });
 
         filePreviewTable.addMouseListener(new MouseAdapter() {
             @Override
@@ -1095,9 +1376,9 @@ public class CodeGenerateDialog extends DialogWrapper {
         tableScroll.setPreferredSize(new Dimension(480, 185));
         tableScroll.setMinimumSize(new Dimension(320, 145));
 
-        card.add(northBox, BorderLayout.NORTH);
+        card.add(northStack, BorderLayout.NORTH);
         card.add(tableScroll, BorderLayout.CENTER);
-        card.add(fieldParseSummaryLabel, BorderLayout.SOUTH);
+        card.add(detailBar, BorderLayout.SOUTH);
         return card;
     }
 
@@ -1115,7 +1396,7 @@ public class CodeGenerateDialog extends DialogWrapper {
         }
         List<Table> resolvedCols = getResolvedColumnsForTable(previewTable);
         if (resolvedCols == null || resolvedCols.isEmpty()) {
-            Messages.showInfoMessage(project, "请先点击预览区右上角「刷新预览」读取表字段元数据后，再双击查看单文件 Diff 预演。", "单文件 Diff 预演提示");
+            Messages.showInfoMessage(project, "请先点击「刷新预览」读取表字段，再查看 Diff。", "查看 Diff");
             return;
         }
 
@@ -1149,12 +1430,25 @@ public class CodeGenerateDialog extends DialogWrapper {
         }
     }
 
+    private void openSelectedPreviewDiff() {
+        if (filePreviewTable == null) {
+            return;
+        }
+        int row = filePreviewTable.getSelectedRow();
+        if (row < 0) {
+            Messages.showInfoMessage(project, "请先在生成计划中选中一个文件。", "查看 Diff");
+            return;
+        }
+        openSingleFileDiffForPreviewRow(row);
+    }
+
     private Map<String, Object> buildCurrentPreviewParams(String previewTable) {
         Map<String, Object> previewParams = new HashMap<>(params);
         previewParams.put("packageName", StringUtils.defaultIfBlank(packageField.getText().trim(), "com.example"));
         previewParams.put("tablePrefixes", tablePrefixesField.getText().trim());
         previewParams.put("baseEntityClass", baseEntityField.getText().trim());
         previewParams.put("feignServiceName", feignServiceNameField.getText().trim());
+        previewParams.put("responseWrapperClass", responseWrapperField.getText().trim());
         previewParams.put("writeStrategy", getSelectedWriteStrategyCode());
         previewParams.put("docStyle", getSelectedDocStyleCode());
         previewParams.put("mapperStrategy", getSelectedMapperStrategyCode());
@@ -1316,43 +1610,12 @@ public class CodeGenerateDialog extends DialogWrapper {
     private void syncCheckedTablesToSummaryField() {
         List<String> checked = getCheckedTableNames();
         selectedTablesReadOnlyField.setText(String.join(",", checked));
-        leftTablePanelTitleLabel.setText("选择生成表（已勾选 " + checked.size() + " 张参与生成）");
+        leftTablePanelTitleLabel.setText("生成表 " + checked.size() + " / " + masterTableMap.size());
         if (StringUtils.isBlank(activePreviewTableName) && !checked.isEmpty()) {
             activePreviewTableName = checked.get(0);
         }
         updateSummaryAndSourceIndicators();
         refreshFileImpactPreview();
-    }
-
-    private void addGridPair(JPanel panel,
-                             GridBagConstraints gbc,
-                             int row,
-                             String leftLabel,
-                             JComponent leftComp,
-                             String rightLabel,
-                             JComponent rightComp) {
-        gbc.gridy = row;
-
-        gbc.gridx = 0;
-        gbc.weightx = 0;
-        JBLabel l1 = new JBLabel(leftLabel);
-        l1.setForeground(SolidGlassTheme.textPrimary());
-        panel.add(l1, gbc);
-
-        gbc.gridx = 1;
-        gbc.weightx = 0.48;
-        panel.add(leftComp, gbc);
-
-        gbc.gridx = 2;
-        gbc.weightx = 0;
-        JBLabel l2 = new JBLabel(rightLabel);
-        l2.setForeground(SolidGlassTheme.textPrimary());
-        l2.setBorder(JBUI.Borders.emptyLeft(8));
-        panel.add(l2, gbc);
-
-        gbc.gridx = 3;
-        gbc.weightx = 0.52;
-        panel.add(rightComp, gbc);
     }
 
     /**
@@ -1372,7 +1635,8 @@ public class CodeGenerateDialog extends DialogWrapper {
         targetBar.add(queryPageTargetTableLabel, BorderLayout.WEST);
         targetBar.add(scopeHint, BorderLayout.EAST);
 
-        JPanel tablesGrid = new JPanel(new GridLayout(3, 1, 0, 6));
+        GridBagLayout tablesBag = new GridBagLayout();
+        JPanel tablesGrid = new JPanel(tablesBag);
         tablesGrid.setOpaque(false);
 
         // 1. BeanQuery 扩展字段卡片
@@ -1399,6 +1663,9 @@ public class CodeGenerateDialog extends DialogWrapper {
         beanTitle.setForeground(SolidGlassTheme.textPrimary());
         beanBtnBar.add(beanTitle);
 
+        GlassButton smartInferQueryBtn = new GlassButton("智能推导查询规则");
+        smartInferQueryBtn.setToolTipText("基于当前表字段名与数据类型自动推导时间区间、模糊匹配与等值查询规则");
+        smartInferQueryBtn.addActionListener(e -> autoInferQueryRulesForCurrentTable());
         GlassButton addBeanRowBtn = new GlassButton("+ 新增扩展字段");
         addBeanRowBtn.addActionListener(e -> beanQueryTableModel.addRow(new Object[]{"", "String", ""}));
         GlassButton removeBeanRowBtn = new GlassButton("- 删除选中");
@@ -1414,6 +1681,7 @@ public class CodeGenerateDialog extends DialogWrapper {
             reloadQueryTablesForCurrentTable();
         });
 
+        beanBtnBar.add(smartInferQueryBtn);
         beanBtnBar.add(addBeanRowBtn);
         beanBtnBar.add(removeBeanRowBtn);
         beanBtnBar.add(clearBeanBtn);
@@ -1497,6 +1765,9 @@ public class CodeGenerateDialog extends DialogWrapper {
         subTitle.setForeground(SolidGlassTheme.textPrimary());
         subBtnBar.add(subTitle);
 
+        GlassButton autoDiscoverSubBtn = new GlassButton("自动识别子表关联");
+        autoDiscoverSubBtn.setToolTipText("根据 DDL FOREIGN KEY 约束或子表外键命名惯例自动识别一对多子表关系");
+        autoDiscoverSubBtn.addActionListener(e -> autoDiscoverSubTablesForCurrentTable());
         GlassButton addSubRowBtn = new GlassButton("+ 绑定子表");
         addSubRowBtn.addActionListener(e -> subTableRelationModel.addRow(new Object[]{"", "", "id", ""}));
         GlassButton removeSubRowBtn = new GlassButton("- 删除选中");
@@ -1504,6 +1775,7 @@ public class CodeGenerateDialog extends DialogWrapper {
         GlassButton clearSubBtn = new GlassButton("清空");
         clearSubBtn.addActionListener(e -> subTableRelationModel.setRowCount(0));
 
+        subBtnBar.add(autoDiscoverSubBtn);
         subBtnBar.add(addSubRowBtn);
         subBtnBar.add(removeSubRowBtn);
         subBtnBar.add(clearSubBtn);
@@ -1513,9 +1785,27 @@ public class CodeGenerateDialog extends DialogWrapper {
         subTableCard.add(subBtnBar, BorderLayout.NORTH);
         subTableCard.add(subScroll, BorderLayout.CENTER);
 
-        tablesGrid.add(beanCard);
-        tablesGrid.add(serviceCard);
-        tablesGrid.add(subTableCard);
+        SolidGlassPanel[] cards = {beanCard, serviceCard, subTableCard};
+        DefaultTableModel[] models = {beanQueryTableModel, serviceQueryTableModel, subTableRelationModel};
+        for (JBScrollPane scroll : new JBScrollPane[]{beanScroll, serviceScroll, subScroll}) {
+            scroll.setPreferredSize(new Dimension(JBUI.scale(400), JBUI.scale(80)));
+        }
+        Runnable weighByRows = () -> {
+            for (int i = 0; i < cards.length; i++) {
+                GridBagConstraints gbc = new GridBagConstraints(0, i, 1, 1, 1, Math.max(models[i].getRowCount(), 2),
+                        GridBagConstraints.CENTER, GridBagConstraints.BOTH, JBUI.insetsTop(i == 0 ? 0 : 6), 0, 0);
+                if (cards[i].getParent() == tablesGrid) {
+                    tablesBag.setConstraints(cards[i], gbc);
+                } else {
+                    tablesGrid.add(cards[i], gbc);
+                }
+            }
+            tablesGrid.revalidate();
+        };
+        for (DefaultTableModel model : models) {
+            model.addTableModelListener(e -> weighByRows.run());
+        }
+        weighByRows.run();
 
         outer.add(targetBar, BorderLayout.NORTH);
         outer.add(tablesGrid, BorderLayout.CENTER);
@@ -1573,6 +1863,7 @@ public class CodeGenerateDialog extends DialogWrapper {
             if (imported && settingsService.getState() != null) {
                 CodeGenSettingsState.ConfigState st = settingsService.getState();
                 jdbcUrlField.setText(st.jdbcUrl);
+                jdbcUrlField.setCaretPosition(0);
                 databaseField.setText(st.database);
                 usernameField.setText(st.username);
                 passwordField.setText(st.retrieveCredential());
@@ -1591,6 +1882,7 @@ public class CodeGenerateDialog extends DialogWrapper {
             if (imported && settingsService.getState() != null) {
                 CodeGenSettingsState.ConfigState st = settingsService.getState();
                 jdbcUrlField.setText(st.jdbcUrl);
+                jdbcUrlField.setCaretPosition(0);
                 databaseField.setText(st.database);
                 usernameField.setText(st.username);
                 passwordField.setText(st.retrieveCredential());
@@ -1630,7 +1922,7 @@ public class CodeGenerateDialog extends DialogWrapper {
             public void changedUpdate(DocumentEvent e) { }
         });
 
-        JPanel topBar = new JPanel(new BorderLayout());
+        JPanel topBar = new JPanel(new BorderLayout(8, 0));
         topBar.setOpaque(false);
 
         JPanel leftActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
@@ -1668,11 +1960,20 @@ public class CodeGenerateDialog extends DialogWrapper {
             refreshFileImpactPreview();
         });
 
+        GlassButton nlDdlBtn = new GlassButton("自然语言生成 DDL");
+        nlDdlBtn.setToolTipText("输入中文或英文业务需求描述，智能推导标准 CREATE TABLE DDL、字段类型与主子表外键");
+        nlDdlBtn.addActionListener(e -> promptNaturalLanguageDdl());
+
+        GlassButton diffMigrationBtn = new GlassButton("表结构演进 Diff SQL");
+        diffMigrationBtn.setToolTipText("对比旧版 DDL 与当前 DDL，自动生成 MySQL/PG/Oracle/DM8 增量 ALTER TABLE 迁移脚本");
+        diffMigrationBtn.addActionListener(e -> openDdlEvolutionDiffDialog());
+
         leftActions.add(parseBtn);
+        leftActions.add(nlDdlBtn);
+        leftActions.add(diffMigrationBtn);
         leftActions.add(loadSampleBtn);
         leftActions.add(clearSqlOnlyBtn);
 
-        GlassButton switchToDbModeBtn = new GlassButton("切换为数据库连接来源");
         switchToDbModeBtn.addActionListener(e -> {
             databaseConfigVersion++;
             currentSourceMode = DataSourceMode.DATABASE;
@@ -1707,11 +2008,11 @@ public class CodeGenerateDialog extends DialogWrapper {
     private void updateWriteStrategyHint() {
         int idx = writeStrategyCombo.getSelectedIndex();
         if (idx == 0) {
-            writeStrategyHintLabel.setText("基于 PSI 语法树保留已有手写方法与注解，仅精准插入新增字段、枚举项与缺失 import");
+            writeStrategyHintLabel.setText("保留手写方法与注解，只插入新增内容");
         } else if (idx == 1) {
-            writeStrategyHintLabel.setText("生成后先弹出左右分栏 Diff 预览窗口，确认后再写入磁盘");
+            writeStrategyHintLabel.setText("先打开 Diff，确认后再写入磁盘");
         } else {
-            writeStrategyHintLabel.setText("直接用新生成的代码替换同名文件（已有手写修改将被覆盖）");
+            writeStrategyHintLabel.setText("同名文件会被整文件替换");
         }
     }
 
@@ -1764,9 +2065,11 @@ public class CodeGenerateDialog extends DialogWrapper {
         List<String> checkedTables = getCheckedTableNames();
         int tableCount = checkedTables.size();
 
-        rollbackLastBtn.setEnabled(LocalHistoryHelper.hasRollbackableBatch(project));
+        syncRollbackEnabled();
+        switchToDbModeBtn.setVisible(currentSourceMode == DataSourceMode.OFFLINE_DDL);
+        dbPageStatusBadge.setVisible(currentSourceMode != DataSourceMode.DATABASE);
         loadTablesBtn.setText(currentSourceMode == DataSourceMode.OFFLINE_DDL
-                ? "切换并加载数据库表" : "加载表清单");
+                ? "切换并加载数据库表" : dbConnectionVerified ? "重新加载" : "加载表清单");
         loadTablesBtn.setToolTipText("从数据库读取表清单；成功后替换当前来源和选表列表");
         if (currentSourceMode == DataSourceMode.OFFLINE_DDL) {
             sourceBadge.setSourceText("来源：离线 DDL");
@@ -1806,11 +2109,13 @@ public class CodeGenerateDialog extends DialogWrapper {
 
         int totalOptionCount = targetCheckBoxes.size();
         String routeTag = customLayerModuleRouting.isEmpty() ? "" : " · 已启用多模块路由";
-        if (!enumChecked) {
-            targetSelectionCountLabel.setText("生成选项（已选 " + selectedOptions + " / " + totalOptionCount + " 项 · 单表固定产出 " + baseFilesPerTable + " 个文件" + routeTag + "）");
-        } else {
-            targetSelectionCountLabel.setText("生成选项（已选 " + selectedOptions + " / " + totalOptionCount + " 项 · 单表 " + baseFilesPerTable + " 个基础文件 + 按枚举列注释生成枚举" + routeTag + "）");
-        }
+        targetsSummaryTooltip = enumChecked
+                ? "单表 " + baseFilesPerTable + " 个基础文件，另按枚举列注释生成枚举" + routeTag
+                : "单表固定产出 " + baseFilesPerTable + " 个文件" + routeTag;
+        updateTargetsToggleLabel();
+        updateAdvancedToggleLabel();
+        boolean confirmFirst = IncrementalCodeMerger.WriteStrategy.DIFF_PREVIEW.name().equalsIgnoreCase(getSelectedWriteStrategyCode());
+        setOKButtonText(confirmFirst ? "查看 Diff 并确认" : CodeGenBundle.message("dialog.ok.button"));
 
         boolean sourceReady = currentSourceMode == DataSourceMode.OFFLINE_DDL
                 ? !ddlNeedsParsing() && missingOfflineTables().isEmpty()
@@ -1820,11 +2125,11 @@ public class CodeGenerateDialog extends DialogWrapper {
 
         String strategyShortName = (String) writeStrategyCombo.getSelectedItem();
         if (tableCount == 0) {
-            footerSummaryLabel.setText("待生成：0 张表 · 0 个文件（请先在左侧列表勾选参与生成的表）");
+            footerSummaryLabel.setText("待生成：0 张表 · 0 个文件 · 先勾选至少 1 张表");
             footerSummaryLabel.setForeground(SolidGlassTheme.warningFg());
             getOKAction().putValue(Action.SHORT_DESCRIPTION, "请先在下方列表勾选至少 1 张参与生成的表");
         } else if (selectedOptions == 0) {
-            footerSummaryLabel.setText("待生成：" + tableCount + " 张表 · 0 个文件（请至少勾选 1 个生成选项）");
+            footerSummaryLabel.setText("待生成：" + tableCount + " 张表 · 0 个文件 · 先勾选至少 1 个生成目标");
             footerSummaryLabel.setForeground(SolidGlassTheme.warningFg());
             getOKAction().putValue(Action.SHORT_DESCRIPTION, "请至少勾选 1 个生成选项");
         } else if (!sourceReady) {
@@ -1874,6 +2179,9 @@ public class CodeGenerateDialog extends DialogWrapper {
         }
         filePreviewTableModel.setRowCount(0);
         previewRowAbsolutePaths.clear();
+        viewDiffBtn.setEnabled(false);
+        previewParticipates = true;
+        checkPreviewTableBtn.setVisible(false);
 
         List<String> checked = getCheckedTableNames();
         String previewTable = activePreviewTableName;
@@ -1883,20 +2191,21 @@ public class CodeGenerateDialog extends DialogWrapper {
         }
 
         if (StringUtils.isBlank(previewTable)) {
-            rightPreviewTitleLabel.setText("生成文件预览");
+            rightPreviewTitleLabel.setText("生成计划");
             rightPreviewTitleLabel.setToolTipText(null);
-            rightPreviewDetailsLabel.setText("未选择预览表");
-            fieldParseSummaryLabel.setText("请在左侧加载或添加生成表，点击任意行即可预览该表对应的生成文件清单。");
+            rightPreviewDetailsLabel.setText("还没有生成表");
+            fieldParseSummaryLabel.setText("加载表清单或添加表后，这里列出将写入的文件");
             return;
         }
 
         if (currentSourceMode == DataSourceMode.DATABASE && !dbConnectionVerified) {
-            rightPreviewTitleLabel.setText("生成文件预览 · " + previewTable);
+            rightPreviewTitleLabel.setText(previewTable);
             rightPreviewTitleLabel.setToolTipText(previewTable);
-            rightPreviewDetailsLabel.setText("连接未验证，请重新加载表清单");
-            fieldParseSummaryLabel.setText("字段解析：旧数据库元数据已失效");
+            rightPreviewDetailsLabel.setText("连接未验证，生成计划待更新");
+            fieldParseSummaryLabel.setText("旧的字段信息已失效");
             return;
         }
+        previewParticipates = checked.stream().anyMatch(previewTable::equalsIgnoreCase);
 
         String relOutDir = computeRelativeOutputDir();
         outputDirReadOnlyField.setText(relOutDir);
@@ -1908,6 +2217,7 @@ public class CodeGenerateDialog extends DialogWrapper {
         fixedLayerFiles.put("entityBO", new String[]{"entity/bo/" + className + "BO.java"});
         fixedLayerFiles.put("entityVO", new String[]{"entity/vo/" + className + "VO.java"});
         fixedLayerFiles.put("entityQuery", new String[]{"entity/query/" + className + "Query.java"});
+        fixedLayerFiles.put("excelDto", new String[]{"entity/excel/" + className + "ExcelDTO.java"});
         fixedLayerFiles.put("converter", new String[]{"entity/converter/" + className + "Converter.java"});
         fixedLayerFiles.put("mapper", new String[]{"mapper/" + className + "Mapper.java"});
         fixedLayerFiles.put("service", new String[]{
@@ -1929,7 +2239,7 @@ public class CodeGenerateDialog extends DialogWrapper {
             String layerKey = entry.getKey();
             JBCheckBox cb = targetCheckBoxes.get(layerKey);
             if (cb != null && cb.isSelected()) {
-                String routeKey = "converter".equals(layerKey) ? "entityBO" : layerKey;
+                String routeKey = ("converter".equals(layerKey) || "excelDto".equals(layerKey)) ? "entityBO" : layerKey;
                 String layerRoot = CodeGenerate.resolveLayerOutputRoot(project, projectRootPath, routeKey, routingParamHolder);
                 String absBaseDir = layerRoot + relOutDir;
                 String modulePrefix = resolveModuleDisplayPrefix(layerRoot);
@@ -1965,6 +2275,57 @@ public class CodeGenerateDialog extends DialogWrapper {
             previewRowAbsolutePaths.add(diskFile.getAbsolutePath());
         }
 
+        JBCheckBox frontendVueCb = targetCheckBoxes.get("frontendVue");
+        if (frontendVueCb != null && frontendVueCb.isSelected()) {
+            String layerRoot = CodeGenerate.resolveLayerOutputRoot(project, projectRootPath, "controller", routingParamHolder);
+            String modulePrefix = resolveModuleDisplayPrefix(layerRoot);
+            String relVuePath = "src/main/resources/frontend/" + StringUtils.uncapitalize(className) + "/index.vue";
+            File diskFile = new File(layerRoot + relVuePath);
+            previewFileCount++;
+            filePreviewTableModel.addRow(new Object[]{modulePrefix + "resources/frontend/" + StringUtils.uncapitalize(className) + "/index.vue", evaluateDiskFileActionStatus(diskFile, strategyCode)});
+            previewRowAbsolutePaths.add(diskFile.getAbsolutePath());
+        }
+
+        JBCheckBox httpCb = targetCheckBoxes.get("httpClient");
+        if (httpCb != null && httpCb.isSelected()) {
+            String layerRoot = CodeGenerate.resolveLayerOutputRoot(project, projectRootPath, "controller", routingParamHolder);
+            String modulePrefix = resolveModuleDisplayPrefix(layerRoot);
+            String relHttpPath = "src/test/resources/http/" + className + "ApiTest.http";
+            File diskFile = new File(layerRoot + relHttpPath);
+            previewFileCount++;
+            filePreviewTableModel.addRow(new Object[]{modulePrefix + "test/resources/http/" + className + "ApiTest.http", evaluateDiskFileActionStatus(diskFile, strategyCode)});
+            previewRowAbsolutePaths.add(diskFile.getAbsolutePath());
+        }
+
+        JBCheckBox unitTestCb = targetCheckBoxes.get("unitTest");
+        if (unitTestCb != null && unitTestCb.isSelected()) {
+            String layerRoot = CodeGenerate.resolveLayerOutputRoot(project, projectRootPath, "service", routingParamHolder);
+            String modulePrefix = resolveModuleDisplayPrefix(layerRoot);
+            String relTestDir = relOutDir.replaceFirst("^src/main/java/", "src/test/java/");
+            String relTestFile = "service/" + className + "ServiceTest.java";
+            File diskFile = new File(layerRoot + relTestDir, relTestFile);
+            previewFileCount++;
+            filePreviewTableModel.addRow(new Object[]{modulePrefix + "test/" + relTestFile, evaluateDiskFileActionStatus(diskFile, strategyCode)});
+            previewRowAbsolutePaths.add(diskFile.getAbsolutePath());
+        }
+
+        JBCheckBox flywayCb = targetCheckBoxes.get("flywayMigration");
+        if (flywayCb != null && flywayCb.isSelected()) {
+            String layerRoot = CodeGenerate.resolveLayerOutputRoot(project, projectRootPath, "mapper", routingParamHolder);
+            String modulePrefix = resolveModuleDisplayPrefix(layerRoot);
+            String relSqlPath = "src/main/resources/db/migration/V1__init_" + previewTable.toLowerCase(Locale.ROOT) + ".sql";
+            File diskFile = new File(layerRoot + relSqlPath);
+            previewFileCount++;
+            filePreviewTableModel.addRow(new Object[]{modulePrefix + "resources/db/migration/V1__init_" + previewTable.toLowerCase(Locale.ROOT) + ".sql", evaluateDiskFileActionStatus(diskFile, strategyCode)});
+            previewRowAbsolutePaths.add(diskFile.getAbsolutePath());
+        }
+
+        // 附加：在离线 DDL 模式下提供快速调用方法
+        if (Boolean.FALSE) {
+            promptNaturalLanguageDdl();
+            openDdlEvolutionDiffDialog();
+        }
+
         JBCheckBox enumCb = targetCheckBoxes.get("enums");
         List<String> resolvedEnums = getResolvedEnumClassNamesForTable(previewTable);
         if (enumCb != null && enumCb.isSelected()) {
@@ -1974,7 +2335,7 @@ public class CodeGenerateDialog extends DialogWrapper {
             if (resolvedEnums == null) {
                 filePreviewTableModel.addRow(new Object[]{
                         modulePrefix + "entity/enums/" + className + "*Enum.java",
-                        "待解析（点击右上角刷新确认枚举列）"
+                        "待读取"
                 });
                 previewRowAbsolutePaths.add("");
             } else if (resolvedEnums.isEmpty()) {
@@ -1995,26 +2356,40 @@ public class CodeGenerateDialog extends DialogWrapper {
             }
         }
 
-        boolean isCheckedForGen = checked.stream().anyMatch(previewTable::equalsIgnoreCase);
-        String checkStateTag = isCheckedForGen ? "参与生成" : "仅预览，未勾选";
-        String fileCountTag = (resolvedEnums != null || (enumCb != null && !enumCb.isSelected()))
-                ? (" · 计划生成 " + previewFileCount + " 个文件")
-                : (" · 预计 " + previewFileCount + " 个基础文件，枚举待解析");
-        rightPreviewTitleLabel.setText("生成文件预览 · " + previewTable + " -> " + className);
+        int overwriteCount = 0;
+        for (int i = 0; i < filePreviewTableModel.getRowCount(); i++) {
+            if (!previewParticipates) {
+                filePreviewTableModel.setValueAt("不参与", i, 1);
+                continue;
+            }
+            String status = Objects.toString(filePreviewTableModel.getValueAt(i, 1), "");
+            if (status.startsWith("覆盖") || status.startsWith("冲突")) {
+                overwriteCount++;
+            }
+        }
+        String impact = overwriteCount > 0 ? " · 其中 " + overwriteCount + " 个将覆盖" : "";
+        String enumPending = enumCb != null && enumCb.isSelected() && resolvedEnums == null ? " · 枚举待读取" : "";
+        rightPreviewTitleLabel.setText(previewTable + " → " + className);
         rightPreviewTitleLabel.setToolTipText(previewTable + " (" + className + ")");
-        rightPreviewDetailsLabel.setText(currentSourceMode == DataSourceMode.OFFLINE_DDL && ddlNeedsParsing()
-                ? "SQL 已修改，以下为上次解析结果" : checkStateTag + fileCountTag + "（双击文件行可预览 Diff）");
+        checkPreviewTableBtn.setVisible(!previewParticipates);
+        if (currentSourceMode == DataSourceMode.OFFLINE_DDL && ddlNeedsParsing()) {
+            rightPreviewDetailsLabel.setText("SQL 已修改，以下为上次解析结果 · 生成计划待更新");
+        } else if (!previewParticipates) {
+            rightPreviewDetailsLabel.setText("未勾选 · 勾选后预计 " + previewFileCount + " 个文件");
+        } else {
+            rightPreviewDetailsLabel.setText("预计 " + previewFileCount + " 个文件" + impact + enumPending);
+        }
 
         List<Table> cols = getResolvedColumnsForTable(previewTable);
         if (cols != null) {
             ValidationAnnotationResolver.enrichValidationAnnotations(cols, enableValidationCheckBox.isSelected());
             long valCount = cols.stream().filter(c -> c.getValidationAnnotations() != null && !c.getValidationAnnotations().isEmpty()).count();
             int enumCount = resolvedEnums != null ? resolvedEnums.size() : 0;
-            fieldParseSummaryLabel.setText("预览表 [" + previewTable + "] 字段统计：共 " + cols.size() + " 列 · 识别 "
-                    + enumCount + " 个枚举列 · " + valCount + " 列含校验注解");
+            fieldParseSummaryLabel.setText("共 " + cols.size() + " 列 · " + enumCount + " 个枚举列 · " + valCount + " 列含校验注解");
         } else {
-            fieldParseSummaryLabel.setText("预览表 [" + previewTable + "] 字段统计：尚未读取列元数据，点击右上角「刷新预览」可精确计算枚举文件");
+            fieldParseSummaryLabel.setText(columnsLoading ? "正在读取字段…" : "字段待读取");
         }
+        filePreviewTable.repaint();
     }
 
     private String resolveModuleDisplayPrefix(String layerRoot) {
@@ -2174,8 +2549,10 @@ public class CodeGenerateDialog extends DialogWrapper {
                     List<String> tables = CodeGenerateUtils.getAllTablesWithComments(conn, databaseName);
                     ApplicationManager.getApplication().invokeLater(() -> {
                         if (requestVersion != databaseConfigVersion || currentSourceMode != sourceAtStart) return;
-                        dbPageStatusBadge.setStatus("连接成功（共 " + tables.size() + " 张表）", GlyphState.READY);
+                        dbPageStatusBadge.setStatus("连接成功 (" + tables.size() + " 张表)", GlyphState.READY);
                         populateMasterTablesFromDbList(tables);
+                        tableJList.requestFocusInWindow();
+                        readActiveTableColumnsIfMissing();
                     });
                 } catch (Exception ex) {
                     ApplicationManager.getApplication().invokeLater(() -> {
@@ -2194,6 +2571,14 @@ public class CodeGenerateDialog extends DialogWrapper {
                 }
             }
         });
+    }
+
+    private void readActiveTableColumnsIfMissing() {
+        if (currentSourceMode == DataSourceMode.DATABASE && dbConnectionVerified
+                && StringUtils.isNotBlank(activePreviewTableName)
+                && getResolvedColumnsForTable(activePreviewTableName) == null) {
+            previewSelectedTableEnumsAsync();
+        }
     }
 
     private void previewSelectedTableEnumsAsync() {
@@ -2217,6 +2602,8 @@ public class CodeGenerateDialog extends DialogWrapper {
         int requestVersion = databaseConfigVersion;
         String databaseName = databaseField.getText().trim();
         verificationBadge.setStatus("正在读取表字段：" + targetTable, GlyphState.WORKING);
+        columnsLoading = true;
+        refreshFileImpactPreview();
         ProgressManager.getInstance().run(new Task.Backgroundable(project, "Parsing Table Metadata...", false) {
             @Override
             public void run(@NotNull ProgressIndicator indicator) {
@@ -2224,6 +2611,7 @@ public class CodeGenerateDialog extends DialogWrapper {
                     List<Table> columns = CodeGenerateUtils.getList(conn, targetTable, databaseName);
                     ValidationAnnotationResolver.enrichValidationAnnotations(columns, enableValidationCheckBox.isSelected());
                     ApplicationManager.getApplication().invokeLater(() -> {
+                        columnsLoading = false;
                         if (requestVersion != databaseConfigVersion || currentSourceMode != DataSourceMode.DATABASE) return;
                         resolvedTableColumnsCache.put(targetTable.toLowerCase(Locale.ROOT), columns);
                         updateSummaryAndSourceIndicators();
@@ -2231,6 +2619,7 @@ public class CodeGenerateDialog extends DialogWrapper {
                     });
                 } catch (Exception ex) {
                     ApplicationManager.getApplication().invokeLater(() -> {
+                        columnsLoading = false;
                         if (requestVersion != databaseConfigVersion || currentSourceMode != DataSourceMode.DATABASE) return;
                         verificationBadge.setStatus("读取字段失败", GlyphState.ERROR);
                         refreshFileImpactPreview();
@@ -2336,6 +2725,7 @@ public class CodeGenerateDialog extends DialogWrapper {
             state.tablePrefixes = tablePrefixesField.getText().trim();
             state.baseEntityClass = baseEntityField.getText().trim();
             state.feignServiceName = feignServiceNameField.getText().trim();
+            state.responseWrapperClass = responseWrapperField.getText().trim();
             state.layerModuleRouting.clear();
             state.layerModuleRouting.putAll(customLayerModuleRouting);
             state.writeStrategy = getSelectedWriteStrategyCode();
@@ -2442,6 +2832,7 @@ public class CodeGenerateDialog extends DialogWrapper {
         params.put("tablePrefixes", tablePrefixesField.getText().trim());
         params.put("baseEntityClass", baseEntityField.getText().trim());
         params.put("feignServiceName", feignServiceNameField.getText().trim());
+        params.put("responseWrapperClass", responseWrapperField.getText().trim());
         if (!customLayerModuleRouting.isEmpty()) {
             params.put("layerModuleRouting", new LinkedHashMap<>(customLayerModuleRouting));
         } else {
@@ -2564,6 +2955,161 @@ public class CodeGenerateDialog extends DialogWrapper {
             }
             subTableRelationDrafts.put(loadedQueryTableName, relations);
         }
+    }
+
+    private void autoInferQueryRulesForCurrentTable() {
+        String tableKey = StringUtils.defaultIfBlank(loadedQueryTableName, activePreviewTableName);
+        if (StringUtils.isBlank(tableKey)) {
+            Messages.showInfoMessage(project, "请先在「生成配置与选表」页选择目标表。", "智能推导查询规则");
+            return;
+        }
+        List<Table> cols = getResolvedColumnsForTable(tableKey);
+        if (cols == null || cols.isEmpty()) {
+            Messages.showInfoMessage(project, "当前表 [" + tableKey + "] 尚未加载字段元数据，请先在选表页点击右上角「刷新预览」或解析离线 DDL。", "智能推导查询规则");
+            return;
+        }
+        SmartQueryRuleInferencer.InferredQueryRules inferred = SmartQueryRuleInferencer.inferFromColumns(cols);
+        beanQueryTableModel.setRowCount(0);
+        for (BeanQuery bq : inferred.getBeanQueries()) {
+            beanQueryTableModel.addRow(new Object[]{
+                    StringUtils.defaultString(bq.getName()),
+                    StringUtils.defaultIfBlank(bq.getFormat(), "String"),
+                    StringUtils.defaultString(bq.getDescription())
+            });
+        }
+        serviceQueryTableModel.setRowCount(0);
+        for (ServiceQuery sq : inferred.getServiceQueries()) {
+            int typeIdx = 0;
+            try {
+                typeIdx = Integer.parseInt(StringUtils.defaultIfBlank(sq.getType(), "0"));
+            } catch (NumberFormatException ignored) {
+            }
+            String typeLabel = (typeIdx >= 0 && typeIdx < QUERY_TYPES.length) ? QUERY_TYPES[typeIdx] : QUERY_TYPES[0];
+            String rawCol = StringUtils.unwrap(StringUtils.defaultString(sq.getColumn()), '`');
+            String rawSql = StringUtils.unwrap(StringUtils.defaultString(sq.getSql()), '"');
+            serviceQueryTableModel.addRow(new Object[]{
+                    typeLabel,
+                    rawCol,
+                    StringUtils.defaultString(sq.getParameter()),
+                    Boolean.TRUE.equals(sq.getParameterType()),
+                    StringUtils.defaultString(sq.getStart()),
+                    StringUtils.defaultString(sq.getEnd()),
+                    rawSql
+            });
+        }
+        saveCurrentQueryDraft();
+    }
+
+    private void autoDiscoverSubTablesForCurrentTable() {
+        String tableKey = StringUtils.defaultIfBlank(loadedQueryTableName, activePreviewTableName);
+        if (StringUtils.isBlank(tableKey)) {
+            Messages.showInfoMessage(project, "请先在「生成配置与选表」页选择主表。", "自动识别子表关联");
+            return;
+        }
+        Map<String, List<Table>> columnsByTable = new LinkedHashMap<>(resolvedTableColumnsCache);
+        for (DdlSqlParser.ParsedTable pt : parsedDdlTables.values()) {
+            columnsByTable.put(pt.getTableName(), pt.getColumns());
+        }
+        List<SubTableRelation> discovered = RelationTopologyDetector.discoverSubTableRelations(
+                tableKey,
+                parsedDdlTables,
+                columnsByTable,
+                tablePrefixesField.getText().trim()
+        );
+        if (discovered.isEmpty()) {
+            Messages.showInfoMessage(project, "未在已加载的表结构中识别到指向 [" + tableKey + "] 的一对多子表外键。", "自动识别子表关联");
+            return;
+        }
+        subTableRelationModel.setRowCount(0);
+        for (SubTableRelation rel : discovered) {
+            subTableRelationModel.addRow(new Object[]{
+                    StringUtils.defaultString(rel.getSubTableName()),
+                    StringUtils.defaultString(rel.getForeignKeyColumn()),
+                    StringUtils.defaultIfBlank(rel.getMasterKeyProperty(), "id"),
+                    StringUtils.defaultString(rel.getRelationComment())
+            });
+        }
+        saveCurrentQueryDraft();
+    }
+
+    private void promptNaturalLanguageDdl() {
+        String defaultPrompt =
+                "创建商品库存表 product_stock：包含仓库编码、商品名称、库存数量、预警阈值、单价金额、库存状态（0：正常，1：缺货，2：冻结）、负责人手机号、负责人邮箱\n\n" +
+                "创建商品库存明细表 product_stock_item：包含库存ID product_stock_id、批次编号、变动数量、备注说明";
+        JBTextArea promptArea = new JBTextArea(defaultPrompt, 7, 56);
+        promptArea.setLineWrap(true);
+        promptArea.setWrapStyleWord(true);
+        promptArea.setBackground(SolidGlassTheme.inputBg());
+        promptArea.setForeground(SolidGlassTheme.textPrimary());
+        JBScrollPane scroll = new JBScrollPane(promptArea);
+        SolidGlassTheme.styleScrollPane(scroll);
+
+        JPanel panel = new JPanel(new BorderLayout(0, 6));
+        panel.add(new JBLabel("请输入业务实体描述（支持中英文、枚举括号注释与多段主子表描述）："), BorderLayout.NORTH);
+        panel.add(scroll, BorderLayout.CENTER);
+
+        int res = JOptionPane.showConfirmDialog(
+                getContentPane(),
+                panel,
+                "自然语言转标准 DDL SQL 智能建模",
+                JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.PLAIN_MESSAGE
+        );
+        if (res != JOptionPane.OK_OPTION) {
+            return;
+        }
+        String inferredDdl = NaturalLanguageDdlInferenceEngine.inferDdlFromNaturalLanguage(promptArea.getText());
+        if (StringUtils.isNotBlank(inferredDdl)) {
+            ddlSqlPane.setText(inferredDdl);
+            parseDdlAndPopulateTables(false);
+        }
+    }
+
+    private void openDdlEvolutionDiffDialog() {
+        String currentDdl = ddlSqlPane.getText();
+        if (StringUtils.isBlank(currentDdl)) {
+            Messages.showInfoMessage(project, "请先在当前 DDL 编辑器中输入或生成新版 CREATE TABLE 语句。", "表结构演进 Diff SQL");
+            return;
+        }
+        JBTextArea oldDdlArea = new JBTextArea(8, 58);
+        oldDdlArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        oldDdlArea.setBackground(SolidGlassTheme.inputBg());
+        oldDdlArea.setForeground(SolidGlassTheme.textPrimary());
+        oldDdlArea.setText("-- 粘贴旧版 CREATE TABLE 语句（留空则直接按新版生成建表脚本）\n");
+
+        ComboBox<DatabaseDialect> dialectCombo = new ComboBox<>(DatabaseDialect.values());
+        JPanel topRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        topRow.add(new JBLabel("目标数据库方言:"));
+        topRow.add(dialectCombo);
+
+        JPanel inputPanel = new JPanel(new BorderLayout(0, 6));
+        inputPanel.add(topRow, BorderLayout.NORTH);
+        inputPanel.add(new JBScrollPane(oldDdlArea), BorderLayout.CENTER);
+
+        int res = JOptionPane.showConfirmDialog(
+                getContentPane(),
+                inputPanel,
+                "对比旧版 DDL 生成增量 ALTER TABLE 迁移脚本",
+                JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.PLAIN_MESSAGE
+        );
+        if (res != JOptionPane.OK_OPTION) {
+            return;
+        }
+        DatabaseDialect dialect = (DatabaseDialect) Objects.requireNonNullElse(dialectCombo.getSelectedItem(), DatabaseDialect.MYSQL);
+        String migrationSql = DdlMigrationGenerator.generateScriptDiffMigration(oldDdlArea.getText(), currentDdl, dialect);
+
+        JBTextArea outputArea = new JBTextArea(migrationSql, 14, 64);
+        outputArea.setEditable(false);
+        outputArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        outputArea.setBackground(SolidGlassTheme.inputBg());
+        outputArea.setForeground(SolidGlassTheme.textPrimary());
+        JOptionPane.showMessageDialog(
+                getContentPane(),
+                new JBScrollPane(outputArea),
+                "增量迁移 SQL 预览 (" + dialect.name() + ")",
+                JOptionPane.PLAIN_MESSAGE
+        );
     }
 
     private int indexOfJavaType(String format) {

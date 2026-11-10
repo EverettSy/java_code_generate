@@ -37,7 +37,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * IDE Settings 模板工作台与全局策略配置页（v3.0 M2：左右分栏实时 FreeMarker 渲染沙箱 + 多技术栈对象映射策略 + 团队规范契约同步）
+ * IDE Settings 模板工作台与全局策略配置页（v4.0 M1：左右分栏实时 FreeMarker 渲染沙箱 + 统一响应包装配置 + 16 套模板工作台）
  * 挂载路径：Settings / Preferences -> Tools -> Syrobin Code Generate
  *
  * @author syrobin
@@ -87,6 +87,7 @@ public class SklCodeGenConfigurable implements Configurable {
     private JBTextField tablePrefixesField;
     private JBTextField baseEntityField;
     private JBTextField feignServiceNameField;
+    private JBTextField responseWrapperField;
     private JBCheckBox enableValidationCheckBox;
 
     private ComboBox<String> templateSelectorCombo;
@@ -115,7 +116,7 @@ public class SklCodeGenConfigurable implements Configurable {
 
         JPanel header = SolidGlassTheme.createCompactHeader(
                 "Syrobin Code Generate · 全局策略与实时模板工作台",
-                "v3.0 GA",
+                "v4.0 GA",
                 statusGlyph
         );
 
@@ -126,6 +127,7 @@ public class SklCodeGenConfigurable implements Configurable {
         tablePrefixesField = new JBTextField();
         baseEntityField = new JBTextField();
         feignServiceNameField = new JBTextField();
+        responseWrapperField = new JBTextField();
         tablePrefixesField.setBackground(SolidGlassTheme.inputBg());
         tablePrefixesField.setForeground(SolidGlassTheme.textPrimary());
         tablePrefixesField.getEmptyText().setText("如 t_,sys_,biz_");
@@ -135,6 +137,9 @@ public class SklCodeGenConfigurable implements Configurable {
         feignServiceNameField.setBackground(SolidGlassTheme.inputBg());
         feignServiceNameField.setForeground(SolidGlassTheme.textPrimary());
         feignServiceNameField.getEmptyText().setText("可选：如 order-service（留空默认按 ${moduleName}-service 生成）");
+        responseWrapperField.setBackground(SolidGlassTheme.inputBg());
+        responseWrapperField.setForeground(SolidGlassTheme.textPrimary());
+        responseWrapperField.getEmptyText().setText("可选：如 com.example.common.Result（留空返回裸类型）");
 
         enableValidationCheckBox = new JBCheckBox("默认开启字段校验注解推断 (@NotBlank / @NotNull / @Size / @Email / @Pattern)", true);
         enableValidationCheckBox.setOpaque(false);
@@ -161,7 +166,8 @@ public class SklCodeGenConfigurable implements Configurable {
         addPair(strategyCard, gbc, 0, "默认写入方式:", writeStrategyCombo, "Spring Boot 预设:", bootVersionCombo);
         addPair(strategyCard, gbc, 1, "默认文档注解:", docStyleCombo, "对象转换策略:", mapperStrategyCombo);
         addPair(strategyCard, gbc, 2, "默认剥离前缀:", tablePrefixesField, "默认实体基类:", baseEntityField);
-        addPair(strategyCard, gbc, 3, "Feign 服务名:", feignServiceNameField, "字段校验注解:", enableValidationCheckBox);
+        addPair(strategyCard, gbc, 3, "Feign 服务名:", feignServiceNameField, "统一响应包装:", responseWrapperField);
+        addPair(strategyCard, gbc, 4, "字段校验注解:", enableValidationCheckBox, "", new JLabel(""));
 
         SolidGlassPanel templateCenterCard = new SolidGlassPanel(new BorderLayout(6, 6), Thickness.MEDIUM);
 
@@ -190,7 +196,7 @@ public class SklCodeGenConfigurable implements Configurable {
             }
         });
 
-        GlassButton exportToProjectBtn = new GlassButton("导出全部 15 套模板到工程", true);
+        GlassButton exportToProjectBtn = new GlassButton("导出全部 20 套模板到工程", true);
         exportToProjectBtn.addActionListener(e -> exportTemplatesToProject());
 
         btnGroup.add(resetCurrentBtn);
@@ -198,7 +204,7 @@ public class SklCodeGenConfigurable implements Configurable {
 
         JPanel selectorLeft = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         selectorLeft.setOpaque(false);
-        JBLabel selLabel = new JBLabel("选择 FreeMarker 模板 (共 15 套):");
+        JBLabel selLabel = new JBLabel("选择 FreeMarker 模板 (共 20 套):");
         selLabel.setForeground(SolidGlassTheme.textPrimary());
         selectorLeft.add(selLabel);
         selectorLeft.add(templateSelectorCombo);
@@ -258,7 +264,7 @@ public class SklCodeGenConfigurable implements Configurable {
                 "<html><b>可用模板变量：</b> " +
                         "<code>${packageName}</code>、<code>${ClassName}</code>、<code>${className}</code>、" +
                         "<code>${tableName}</code>、<code>${functionName}</code>、<code>${bootVersion}</code>、" +
-                        "<code>${docStyle}</code>、<code>${mapperStrategy}</code>、<code>${baseEntitySimpleName}</code>、<code>${list}</code>、<code>${entityColumns}</code></html>"
+                        "<code>${docStyle}</code>、<code>${mapperStrategy}</code>、<code>${responseWrapperSimpleName}</code>、<code>${treeTable}</code>、<code>${list}</code></html>"
         );
         varsHint.setForeground(SolidGlassTheme.textSecondary());
 
@@ -406,6 +412,9 @@ public class SklCodeGenConfigurable implements Configurable {
         if (!Objects.equals(feignServiceNameField.getText().trim(), StringUtils.defaultString(st.feignServiceName))) {
             return true;
         }
+        if (!Objects.equals(responseWrapperField.getText().trim(), StringUtils.defaultString(st.responseWrapperClass))) {
+            return true;
+        }
         if (enableValidationCheckBox.isSelected() != st.enableValidation) {
             return true;
         }
@@ -424,6 +433,7 @@ public class SklCodeGenConfigurable implements Configurable {
             st.tablePrefixes = tablePrefixesField.getText().trim();
             st.baseEntityClass = baseEntityField.getText().trim();
             st.feignServiceName = feignServiceNameField.getText().trim();
+            st.responseWrapperClass = responseWrapperField.getText().trim();
             st.enableValidation = enableValidationCheckBox.isSelected();
             st.customTemplates.clear();
             st.customTemplates.putAll(workingTemplates);
@@ -442,6 +452,7 @@ public class SklCodeGenConfigurable implements Configurable {
             tablePrefixesField.setText(StringUtils.defaultString(st.tablePrefixes));
             baseEntityField.setText(StringUtils.defaultString(st.baseEntityClass));
             feignServiceNameField.setText(StringUtils.defaultString(st.feignServiceName));
+            responseWrapperField.setText(StringUtils.defaultString(st.responseWrapperClass));
             enableValidationCheckBox.setSelected(st.enableValidation);
             workingTemplates.clear();
             if (st.customTemplates != null) {

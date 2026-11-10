@@ -34,7 +34,14 @@ import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+<#if treeTable?? && treeTable>
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+<#else>
+import java.util.List;
+</#if>
 
 /**
  * ${functionName} Service 实现类
@@ -70,6 +77,36 @@ public class ${ClassName}ServiceImpl extends ServiceImpl<${ClassName}Mapper, ${C
         query(${className}Query, queryWrapper);
         return ${className}ServiceResults.assignment(list(queryWrapper));
     }
+<#if treeTable?? && treeTable>
+
+    @Override
+    public List<${ClassName}VO> treeEnhance(${ClassName}Query ${className}Query) {
+        List<${ClassName}VO> allNodes = listEnhance(${className}Query);
+        if (allNodes == null || allNodes.isEmpty()) {
+            return new ArrayList<>();
+        }
+        Map<Object, ${ClassName}VO> nodeMap = new LinkedHashMap<>();
+        for (${ClassName}VO node : allNodes) {
+            if (node.get${treeIdColumnUpper!"Id"}() != null) {
+                nodeMap.put(node.get${treeIdColumnUpper!"Id"}(), node);
+            }
+        }
+        List<${ClassName}VO> roots = new ArrayList<>();
+        for (${ClassName}VO node : allNodes) {
+            Object parentKey = node.get${treeParentColumnUpper!"ParentId"}();
+            ${ClassName}VO parentNode = parentKey != null ? nodeMap.get(parentKey) : null;
+            if (parentNode != null && !parentKey.equals(node.get${treeIdColumnUpper!"Id"}())) {
+                if (parentNode.getChildren() == null) {
+                    parentNode.setChildren(new ArrayList<>());
+                }
+                parentNode.getChildren().add(node);
+            } else {
+                roots.add(node);
+            }
+        }
+        return roots;
+    }
+</#if>
 
     @Override
     public Page<${ClassName}VO> pageEnhance(Page page, ${ClassName}Query ${className}Query) {

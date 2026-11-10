@@ -5,6 +5,11 @@
  * @since ${date}
  */
 import axios, { AxiosPromise } from 'axios';
+<#if subTableRelations?? && (subTableRelations?size > 0)>
+<#list subTableRelations as rel>
+import { ${rel.subClassName}VO, ${rel.subClassName}BO } from './${rel.subClassVarName}.api';
+</#list>
+</#if>
 
 export interface PageResult<T> {
   records: T[];
@@ -21,10 +26,14 @@ export interface ${ClassName}VO {
   /** ${column.columnComment!} */
   ${column.columnName}?: <#if column.dataType == "Integer" || column.dataType == "Short" || column.dataType == "Double" || column.dataType == "Float">number<#elseif column.dataType == "Long" || column.dataType == "BigDecimal">string | number<#elseif column.dataType == "Boolean">boolean<#else>string</#if>;
 </#list>
+<#if treeTable?? && treeTable>
+  /** 树形子节点集合 */
+  children?: ${ClassName}VO[];
+</#if>
 <#if subTableRelations?? && (subTableRelations?size > 0)>
 <#list subTableRelations as rel>
   /** ${rel.relationComment! (rel.subClassName + "子表列表")} */
-  ${rel.subClassVarName}List?: Record<string, any>[];
+  ${rel.subClassVarName}List?: ${rel.subClassName}VO[];
 </#list>
 </#if>
 }
@@ -40,7 +49,7 @@ export interface ${ClassName}BO {
 <#if subTableRelations?? && (subTableRelations?size > 0)>
 <#list subTableRelations as rel>
   /** ${rel.relationComment! (rel.subClassName + "子表列表")} */
-  ${rel.subClassVarName}List?: Record<string, any>[];
+  ${rel.subClassVarName}List?: ${rel.subClassName}BO[];
 </#list>
 </#if>
 }
@@ -71,8 +80,8 @@ const BASE_PATH = '/${className}';
 /**
  * ${functionName} 分页查询
  */
-export function select${ClassName}Page(params: ${ClassName}Query): AxiosPromise<PageResult<${ClassName}VO>> {
-  return axios.get(`${r"${BASE_PATH}"}/select`, { params });
+export function select${ClassName}Page(params: ${ClassName}Query, current?: number, size?: number): AxiosPromise<PageResult<${ClassName}VO>> {
+  return axios.get(`${r"${BASE_PATH}"}/select`, { params: { ...params, current, size } });
 }
 
 /**
@@ -81,6 +90,15 @@ export function select${ClassName}Page(params: ${ClassName}Query): AxiosPromise<
 export function select${ClassName}List(params?: ${ClassName}Query): AxiosPromise<${ClassName}VO[]> {
   return axios.get(`${r"${BASE_PATH}"}/selectList`, { params });
 }
+<#if treeTable?? && treeTable>
+
+/**
+ * ${functionName} 树形结构查询
+ */
+export function select${ClassName}Tree(params?: ${ClassName}Query): AxiosPromise<${ClassName}VO[]> {
+  return axios.get(`${r"${BASE_PATH}"}/tree`, { params });
+}
+</#if>
 
 /**
  * ${functionName} 单条详情查询
@@ -116,3 +134,19 @@ export function update${ClassName}(data: ${ClassName}BO): AxiosPromise<boolean> 
 export function remove${ClassName}(data: Partial<${ClassName}BO>): AxiosPromise<boolean> {
   return axios.delete(`${r"${BASE_PATH}"}/remove`, { data });
 }
+<#if excelEnabled?? && excelEnabled>
+
+/**
+ * ${functionName} 导出 Excel 数据
+ */
+export function export${ClassName}Excel(params?: ${ClassName}Query): AxiosPromise<${ClassName}VO[]> {
+  return axios.get(`${r"${BASE_PATH}"}/exportExcel`, { params });
+}
+
+/**
+ * ${functionName} 批量导入 Excel 数据
+ */
+export function import${ClassName}Excel(data: ${ClassName}BO[]): AxiosPromise<number> {
+  return axios.post(`${r"${BASE_PATH}"}/importExcel`, data);
+}
+</#if>

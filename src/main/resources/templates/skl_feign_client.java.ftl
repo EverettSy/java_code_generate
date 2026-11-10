@@ -1,6 +1,9 @@
 package ${packageName}.feign;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+<#if responseWrapperClass?? && responseWrapperClass?has_content>
+import ${responseWrapperClass};
+</#if>
 import ${packageName}.entity.bo.${ClassName}BO;
 import ${packageName}.entity.query.${ClassName}Query;
 import ${packageName}.entity.vo.${ClassName}VO;
@@ -35,6 +38,8 @@ import java.util.List;
         path = "/${className}"
 )
 public interface ${ClassName}FeignClient {
+<#assign hasWrap = (responseWrapperSimpleName?? && responseWrapperSimpleName?has_content)>
+<#assign wrapName = responseWrapperSimpleName!"">
 
     /**
      * ${functionName}分页查询
@@ -45,7 +50,7 @@ public interface ${ClassName}FeignClient {
     @Operation(summary = "${functionName}分页查询")
 </#if>
     @GetMapping("/select")
-    Page<${ClassName}VO> select(@SpringQueryMap ${ClassName}Query ${className}Query,
+    <#if hasWrap>${wrapName}<Page<${ClassName}VO>><#else>Page<${ClassName}VO></#if> select(@SpringQueryMap ${ClassName}Query ${className}Query,
                                 @RequestParam(value = "current", required = false) Integer current,
                                 @RequestParam(value = "size", required = false) Integer size);
 
@@ -58,7 +63,20 @@ public interface ${ClassName}FeignClient {
     @Operation(summary = "${functionName}集合查询")
 </#if>
     @GetMapping("/selectList")
-    List<${ClassName}VO> selectList(@SpringQueryMap ${ClassName}Query ${className}Query);
+    <#if hasWrap>${wrapName}<List<${ClassName}VO>><#else>List<${ClassName}VO></#if> selectList(@SpringQueryMap ${ClassName}Query ${className}Query);
+<#if treeTable?? && treeTable>
+
+    /**
+     * ${functionName}树形结构查询
+     */
+<#if docStyle?? && docStyle == "SWAGGER2">
+    @ApiOperation(value = "${functionName}树形结构查询")
+<#elseif docStyle?? && docStyle == "OPENAPI3">
+    @Operation(summary = "${functionName}树形结构查询")
+</#if>
+    @GetMapping("/tree")
+    <#if hasWrap>${wrapName}<List<${ClassName}VO>><#else>List<${ClassName}VO></#if> tree(@SpringQueryMap ${ClassName}Query ${className}Query);
+</#if>
 
     /**
      * ${functionName}单条查询
@@ -69,7 +87,7 @@ public interface ${ClassName}FeignClient {
     @Operation(summary = "${functionName}单条查询")
 </#if>
     @GetMapping("/selectOne")
-    ${ClassName}VO selectOne(@SpringQueryMap ${ClassName}Query ${className}Query);
+    <#if hasWrap>${wrapName}<${ClassName}VO><#else>${ClassName}VO</#if> selectOne(@SpringQueryMap ${ClassName}Query ${className}Query);
 
     /**
      * ${functionName}总数统计
@@ -80,7 +98,7 @@ public interface ${ClassName}FeignClient {
     @Operation(summary = "${functionName}总数统计")
 </#if>
     @GetMapping("/count")
-    Long count(@SpringQueryMap ${ClassName}Query ${className}Query);
+    <#if hasWrap>${wrapName}<Long><#else>Long</#if> count(@SpringQueryMap ${ClassName}Query ${className}Query);
 
     /**
      * ${functionName}新增
@@ -91,7 +109,7 @@ public interface ${ClassName}FeignClient {
     @Operation(summary = "${functionName}新增")
 </#if>
     @PostMapping("/save")
-    String save(@Validated @RequestBody ${ClassName}BO ${className}BO);
+    <#if hasWrap>${wrapName}<String><#else>String</#if> save(@Validated @RequestBody ${ClassName}BO ${className}BO);
 
     /**
      * ${functionName}修改
@@ -102,7 +120,7 @@ public interface ${ClassName}FeignClient {
     @Operation(summary = "${functionName}修改")
 </#if>
     @PutMapping("/update")
-    Boolean update(@Validated @RequestBody ${ClassName}BO ${className}BO);
+    <#if hasWrap>${wrapName}<Boolean><#else>Boolean</#if> update(@Validated @RequestBody ${ClassName}BO ${className}BO);
 
     /**
      * ${functionName}删除
@@ -113,5 +131,5 @@ public interface ${ClassName}FeignClient {
     @Operation(summary = "${functionName}删除")
 </#if>
     @DeleteMapping("/remove")
-    Boolean remove(@RequestBody ${ClassName}BO ${className}BO);
+    <#if hasWrap>${wrapName}<Boolean><#else>Boolean</#if> remove(@RequestBody ${ClassName}BO ${className}BO);
 }

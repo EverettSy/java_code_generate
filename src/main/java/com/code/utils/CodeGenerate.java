@@ -1,6 +1,7 @@
 package com.code.utils;
 
 import com.code.config.CodeGenSettingsState;
+import com.code.spi.CodeGenPostProcessor;
 import com.code.utils.entity.*;
 import com.code.utils.freemarker.FreeMarkers;
 import com.intellij.openapi.application.ApplicationManager;
@@ -26,7 +27,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 
 /**
- * 核心代码生成器（v3.0 M1 + M2 + M3：支持多模块分层路径路由、表前缀剥离、BaseEntity 继承、MapStruct/MapperXML、主子表 One-to-Many 联表与前端 TypeScript/Axios API 生成）
+ * 核心代码生成器（v4.0 GA：支持 20 套全栈与数据库迁移模板、自定义模板包 CustomTemplatePack、开放扩展点 CodeGenPostProcessor、统一响应包装 Result<T>、TreeVO、主子表自动发现、智能查询推导、EasyExcel、Vue3 CRUD 与 JUnit5 单元测试）
  *
  * @author syrobin
  */
@@ -73,7 +74,7 @@ public class CodeGenerate {
     }
 
     /**
-     * 内存预渲染指定表的全量目标文件（不落盘），返回「目标文件绝对路径 -> 渲染后的 Java/XML/TS 源码」映射。
+     * 内存预渲染指定表的全量目标文件（不落盘），返回「目标文件绝对路径 -> 渲染后的 Java/XML/TS/Vue/HTTP/SQL 源码」映射。
      */
     @SuppressWarnings("unchecked")
     @NotNull
@@ -89,13 +90,15 @@ public class CodeGenerate {
             return outputFiles;
         }
 
-        String basePackage = resolveBasePackageName(project, path, parameterMap);
-        String packageName = StringUtils.isNotBlank(moduleName)
-                ? basePackage + "." + moduleName.trim()
+        String basePackage = normalizePackageName(resolveBasePackageName(project, path, parameterMap));
+        String cleanModuleSegment = StringUtils.isNotBlank(moduleName) ? moduleName.trim() : "";
+        String packageName = StringUtils.isNotBlank(cleanModuleSegment)
+                ? basePackage + "." + cleanModuleSegment
                 : basePackage;
 
         String tableComment = null;
         List<Table> rawColumns = null;
+        Map<String, DdlSqlParser.ParsedTable> ddlMap = null;
 
         // 1. 优先检查是否存在离线 DDL 解析出的表元数据
         Object ddlMapObj = parameterMap.get("parsedDdlTables");
@@ -103,7 +106,7 @@ public class CodeGenerate {
             if (!(ddlMapObj instanceof Map<?, ?>)) {
                 throw new IllegalArgumentException("离线 DDL 元数据无效，请重新解析");
             }
-            Map<String, DdlSqlParser.ParsedTable> ddlMap = (Map<String, DdlSqlParser.ParsedTable>) ddlMapObj;
+            ddlMap = (Map<String, DdlSqlParser.ParsedTable>) ddlMapObj;
             DdlSqlParser.ParsedTable parsed = findParsedTableIgnoreCase(ddlMap, table);
             if (parsed == null) {
                 throw new IllegalArgumentException("离线 DDL 未包含表：" + table);
@@ -144,7 +147,30 @@ public class CodeGenerate {
         Set<String> ignoredColumns = resolveIgnoredBaseColumns(project, parameterMap, StringUtils.isNotBlank(baseEntitySimpleName));
         List<Table> entityColumns = filterEntityColumns(rawColumns, ignoredColumns);
 
-        List<SubTableRelation> subTableRelations = resolveSubTableRelationsForTable(project, parameterMap, table, tablePrefixes);
+        List<SubTableRelation> subTableRelations = resolveSubTableRelationsForTable(project, parameterMap, table, tablePrefixes, ddlMap);
+
+        String responseWrapperClass = resolveResponseWrapperClass(project, parameterMap);
+        String responseWrapperSimpleName = extractSimpleClassName(responseWrapperClass);
+        String responseWrapperSuccessMethod = resolveResponseWrapperSuccessMethod(project, parameterMap);
+
+        // v4.0 M1：树形自关联表检测（包含 parent_id / pid / parent_code 时自动开启 TreeVO 与 treeEnhance）
+        Table treeParentCol = RelationTopologyDetector.detectTreeParentColumn(rawColumns);
+        Table treeIdCol = RelationTopologyDetector.detectPrimaryKeyColumn(rawColumns);
+        boolean treeTable = isTreeTableEnabled(parameterMap, treeParentCol);
+
+        // v4.0 M1：若开启 autoInferQueryRules 且当前表无手配查询规则，则自动根据列元数据推导 BeanQuery 与 ServiceQuery
+        Object resolvedServiceQueryList = queryRulesForTable(parameterMap, "serviceQueryList", table);
+        Object resolvedBeanQueryList = queryRulesForTable(parameterMap, "beanQuery", table);
+        if (!Boolean.FALSE.equals(parameterMap.get("autoInferQueryRules"))) {
+            boolean explicitInfer = Boolean.TRUE.equals(parameterMap.get("autoInferQueryRules"));
+            boolean emptySq = !(resolvedServiceQueryList instanceof Collection<?> c1) || c1.isEmpty();
+            boolean emptyBq = !(resolvedBeanQueryList instanceof Collection<?> c2) || c2.isEmpty();
+            if (explicitInfer && emptySq && emptyBq) {
+                SmartQueryRuleInferencer.InferredQueryRules inferred = SmartQueryRuleInferencer.inferFromColumns(rawColumns);
+                resolvedBeanQueryList = inferred.getBeanQueries();
+                resolvedServiceQueryList = inferred.getServiceQueries();
+            }
+        }
 
         Configuration cfg = buildFreemarkerConfiguration(project, path);
 
@@ -152,9 +178,17 @@ public class CodeGenerate {
         String feignServiceName = resolveFeignServiceName(project, parameterMap, resolvedModuleName);
 
         Map<String, Object> model = new HashMap<>();
-        model.put("packageName", StringUtils.lowerCase(packageName));
+        model.put("packageName", packageName);
         model.put("moduleName", resolvedModuleName);
         model.put("feignServiceName", feignServiceName);
+        model.put("responseWrapperClass", responseWrapperClass);
+        model.put("responseWrapperSimpleName", responseWrapperSimpleName);
+        model.put("responseWrapperSuccessMethod", responseWrapperSuccessMethod);
+        model.put("treeTable", treeTable);
+        model.put("treeParentColumnName", treeParentCol != null ? treeParentCol.getColumnName() : "parentId");
+        model.put("treeParentColumnUpper", treeParentCol != null ? treeParentCol.getColumnNameUpper() : "ParentId");
+        model.put("treeIdColumnName", treeIdCol != null ? treeIdCol.getColumnName() : "id");
+        model.put("treeIdColumnUpper", treeIdCol != null ? treeIdCol.getColumnNameUpper() : "Id");
         model.put("className", StringUtils.uncapitalize(className));
         model.put("ClassName", className);
         model.put("author", author);
@@ -173,10 +207,11 @@ public class CodeGenerate {
         model.put("subTableRelations", subTableRelations);
         model.put("braceL", "{");
         model.put("braceR", "}");
-        model.put("serviceQueryList", queryRulesForTable(parameterMap, "serviceQueryList", table));
-        model.put("beanQuery", queryRulesForTable(parameterMap, "beanQuery", table));
+        model.put("serviceQueryList", resolvedServiceQueryList);
+        model.put("beanQuery", resolvedBeanQueryList);
+        model.put("excelEnabled", isEnabled(parameterMap, "excelDto"));
 
-        String packageRelDir = StringUtils.lowerCase(packageName).replace(".", "/");
+        String packageRelDir = packageName.replace(".", "/");
 
         // 1. 生成 Mapper 接口与可选 Mapper XML
         if (isEnabled(parameterMap, "mapper")) {
@@ -318,7 +353,7 @@ public class CodeGenerate {
             );
         }
 
-        // 11. 生成前端 TypeScript Interface & Axios API 模块（v3.0 M3）
+        // 11. 生成前端 TypeScript Interface & Axios API 模块（v3.0 M3 + v4.0 M1 强类型主子表 + v4.0 M2 Excel API）
         if (isEnabled(parameterMap, "frontendApi")) {
             String layerRoot = resolveLayerOutputRoot(project, path, "controller", parameterMap);
             outputFiles.put(
@@ -327,14 +362,104 @@ public class CodeGenerate {
             );
         }
 
+        // 12. 生成 IDEA HTTP Client 接口联调测试文件（v4.0 M1）
+        if (isEnabled(parameterMap, "httpClient")) {
+            String layerRoot = resolveLayerOutputRoot(project, path, "controller", parameterMap);
+            outputFiles.put(
+                    layerRoot + "src/test/resources/http/" + className + "ApiTest.http",
+                    renderToString(cfg, "skl_http_client.http.ftl", model)
+            );
+        }
+
+        // 13. 生成 EasyExcel 导入导出 DTO 模型（v4.0 M2）
+        if (isEnabled(parameterMap, "excelDto")) {
+            String layerRoot = resolveLayerOutputRoot(project, path, "entityBO", parameterMap);
+            outputFiles.put(
+                    layerRoot + "src/main/java/" + packageRelDir + "/entity/excel/" + className + "ExcelDTO.java",
+                    renderToString(cfg, "skl_excel_dto.java.ftl", model)
+            );
+        }
+
+        // 14. 生成 Vue3 + Element Plus 前端 CRUD 页面（v4.0 M2）
+        if (isEnabled(parameterMap, "frontendVue")) {
+            String layerRoot = resolveLayerOutputRoot(project, path, "controller", parameterMap);
+            outputFiles.put(
+                    layerRoot + "src/main/resources/frontend/" + StringUtils.uncapitalize(className) + "/index.vue",
+                    renderToString(cfg, "skl_frontend_vue.vue.ftl", model)
+            );
+        }
+
+        // 15. 生成 JUnit 5 + Mockito Service 单元测试类（v4.0 M2）
+        if (isEnabled(parameterMap, "unitTest")) {
+            String layerRoot = resolveLayerOutputRoot(project, path, "service", parameterMap);
+            outputFiles.put(
+                    layerRoot + "src/test/java/" + packageRelDir + "/service/" + className + "ServiceTest.java",
+                    renderToString(cfg, "skl_unit_test.java.ftl", model)
+            );
+        }
+
+        // 16. 生成 Flyway / Liquibase 数据库版本迁移脚本（v4.0 M3）
+        if (isEnabled(parameterMap, "flywayMigration")) {
+            String layerRoot = resolveLayerOutputRoot(project, path, "mapper", parameterMap);
+            outputFiles.put(
+                    layerRoot + "src/main/resources/db/migration/V1__init_" + table.toLowerCase(Locale.ROOT) + ".sql",
+                    renderToString(cfg, "skl_flyway_migration.sql.ftl", model)
+            );
+        }
+
+        // 17. 渲染开放生态自定义模板包 (CustomTemplateDefinition)（v4.0 M3）
+        Object customDefsObj = parameterMap.get("customTemplateDefinitions");
+        if (customDefsObj instanceof Collection<?> customDefs) {
+            for (Object item : customDefs) {
+                if (item instanceof CustomTemplatePackManager.CustomTemplateDefinition def
+                        && def.isEnabled()
+                        && StringUtils.isNotBlank(def.getTemplateContent())) {
+                    String layerRoot = resolveLayerOutputRoot(project, path,
+                            StringUtils.defaultIfBlank(def.getLayerKey(), "controller"), parameterMap);
+                    String targetAbsPath = CustomTemplatePackManager.resolveTargetFilePath(
+                            def, layerRoot, packageRelDir, model
+                    );
+                    Template customTpl = new Template(
+                            StringUtils.defaultIfBlank(def.getName(), "custom.ftl"),
+                            new StringReader(def.getTemplateContent()),
+                            cfg
+                    );
+                    outputFiles.put(targetAbsPath, FreeMarkers.renderTemplate(customTpl, model));
+                }
+            }
+        }
+
+        // 18. 触发开放生态 CodeGenPostProcessor 扩展点与注册钩子（v4.0 M3）
+        CodeGenPostProcessor.invokeAll(project, table, model, outputFiles);
+
         return outputFiles;
+    }
+
+    private static boolean isTreeTableEnabled(Map<String, Object> parameterMap, @Nullable Table treeParentCol) {
+        Object explicit = parameterMap.get("treeTable");
+        if (explicit instanceof Boolean b) {
+            return b;
+        }
+        if (explicit != null && StringUtils.isNotBlank(String.valueOf(explicit))) {
+            return "true".equalsIgnoreCase(String.valueOf(explicit)) || "y".equalsIgnoreCase(String.valueOf(explicit));
+        }
+        return treeParentCol != null;
+    }
+
+    @NotNull
+    private static String normalizePackageName(@Nullable String rawPackage) {
+        if (StringUtils.isBlank(rawPackage)) {
+            return "com.example";
+        }
+        return rawPackage.trim().replace('/', '.').replaceAll("\\.+", ".").replaceAll("^\\.|\\.$", "");
     }
 
     @SuppressWarnings("unchecked")
     private static List<SubTableRelation> resolveSubTableRelationsForTable(@Nullable Project project,
                                                                            Map<String, Object> parameterMap,
                                                                            String table,
-                                                                           String tablePrefixes) {
+                                                                           String tablePrefixes,
+                                                                           @Nullable Map<String, DdlSqlParser.ParsedTable> ddlMap) {
         List<SubTableRelation> result = new ArrayList<>();
         Object byTableObj = parameterMap.get("subTableRelationsByTable");
         if (byTableObj instanceof Map<?, ?> byTableMap) {
@@ -346,7 +471,9 @@ public class CodeGenerate {
                         result.add(rel);
                     }
                 }
-                return result;
+                if (!result.isEmpty()) {
+                    return result;
+                }
             }
         }
         Object directObj = parameterMap.get("subTableRelations");
@@ -357,7 +484,9 @@ public class CodeGenerate {
                     result.add(rel);
                 }
             }
-            return result;
+            if (!result.isEmpty()) {
+                return result;
+            }
         }
         if (project != null) {
             List<SubTableRelation> cached = CodeGenSettingsState.getInstance(project).getSubTableRelations(table);
@@ -367,6 +496,12 @@ public class CodeGenerate {
                     result.add(rel);
                 }
             }
+            if (!result.isEmpty()) {
+                return result;
+            }
+        }
+        if (!Boolean.FALSE.equals(parameterMap.get("autoDiscoverSubTables")) && ddlMap != null && ddlMap.size() > 1) {
+            return RelationTopologyDetector.discoverSubTableRelations(table, ddlMap, null, tablePrefixes);
         }
         return result;
     }
@@ -382,6 +517,18 @@ public class CodeGenerate {
                                              @NotNull String mapperStrategy,
                                              boolean enableValidation,
                                              @Nullable String baseEntityClass) throws Exception {
+        return renderSamplePreview(templateName, templateContent, bootVersion, docStyle, mapperStrategy, enableValidation, baseEntityClass, null);
+    }
+
+    @NotNull
+    public static String renderSamplePreview(@NotNull String templateName,
+                                             @NotNull String templateContent,
+                                             @NotNull String bootVersion,
+                                             @NotNull String docStyle,
+                                             @NotNull String mapperStrategy,
+                                             boolean enableValidation,
+                                             @Nullable String baseEntityClass,
+                                             @Nullable String responseWrapperClass) throws Exception {
         String sampleDdl =
                 "CREATE TABLE `user_order` (\n" +
                 "  `id` bigint NOT NULL PRIMARY KEY COMMENT '主键ID',\n" +
@@ -401,10 +548,21 @@ public class CodeGenerate {
                 : Collections.emptySet();
         List<Table> entityCols = filterEntityColumns(rawCols, ignored);
 
+        String wrapperFqcn = StringUtils.defaultString(responseWrapperClass).trim();
+        String wrapperSimple = extractSimpleClassName(wrapperFqcn);
+
         Map<String, Object> model = new HashMap<>();
         model.put("packageName", "com.example.order");
         model.put("moduleName", "order");
         model.put("feignServiceName", "order-service");
+        model.put("responseWrapperClass", wrapperFqcn);
+        model.put("responseWrapperSimpleName", wrapperSimple);
+        model.put("responseWrapperSuccessMethod", "ok");
+        model.put("treeTable", false);
+        model.put("treeParentColumnName", "parentId");
+        model.put("treeParentColumnUpper", "ParentId");
+        model.put("treeIdColumnName", "id");
+        model.put("treeIdColumnUpper", "Id");
         model.put("className", "userOrder");
         model.put("ClassName", "UserOrder");
         model.put("author", "syrobin");
@@ -425,6 +583,7 @@ public class CodeGenerate {
         ));
         model.put("braceL", "{");
         model.put("braceR", "}");
+        model.put("excelEnabled", true);
 
         List<EnumsEntityContent> enumItems = EnumCommentParser.parseEnumItems("订单状态（0：待支付，1：已支付，2：已取消）");
         EnumsEntityName enumName = new EnumsEntityName();
@@ -533,6 +692,10 @@ public class CodeGenerate {
             return "";
         }
         String trimmed = fqcn.trim();
+        int genericIdx = trimmed.indexOf('<');
+        if (genericIdx > 0) {
+            trimmed = trimmed.substring(0, genericIdx).trim();
+        }
         int lastDot = trimmed.lastIndexOf('.');
         return lastDot >= 0 ? trimmed.substring(lastDot + 1) : trimmed;
     }
@@ -563,6 +726,34 @@ public class CodeGenerate {
             }
         }
         return "";
+    }
+
+    private static String resolveResponseWrapperClass(@Nullable Project project, Map<String, Object> parameterMap) {
+        Object paramVal = parameterMap.get("responseWrapperClass");
+        if (paramVal != null) {
+            return String.valueOf(paramVal).trim();
+        }
+        if (project != null) {
+            CodeGenSettingsState.ConfigState st = CodeGenSettingsState.getInstance(project).getState();
+            if (st != null && st.responseWrapperClass != null) {
+                return st.responseWrapperClass.trim();
+            }
+        }
+        return "";
+    }
+
+    private static String resolveResponseWrapperSuccessMethod(@Nullable Project project, Map<String, Object> parameterMap) {
+        Object paramVal = parameterMap.get("responseWrapperSuccessMethod");
+        if (paramVal != null && StringUtils.isNotBlank(String.valueOf(paramVal))) {
+            return String.valueOf(paramVal).trim();
+        }
+        if (project != null) {
+            CodeGenSettingsState.ConfigState st = CodeGenSettingsState.getInstance(project).getState();
+            if (st != null && StringUtils.isNotBlank(st.responseWrapperSuccessMethod)) {
+                return st.responseWrapperSuccessMethod.trim();
+            }
+        }
+        return "ok";
     }
 
     private static String resolveFeignServiceName(@Nullable Project project,

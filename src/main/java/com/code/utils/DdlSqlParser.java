@@ -26,6 +26,10 @@ public class DdlSqlParser {
         private String tableName;
         private String tableComment = "";
         private List<Table> columns = new ArrayList<>();
+        /**
+         * 显式外键约束映射：fkColumnName -> referencedTableName.referencedPkColumnName
+         */
+        private Map<String, String> foreignKeys = new LinkedHashMap<>();
 
         public String getTableName() {
             return tableName;
@@ -50,6 +54,14 @@ public class DdlSqlParser {
         public void setColumns(List<Table> columns) {
             this.columns = columns;
         }
+
+        public Map<String, String> getForeignKeys() {
+            return foreignKeys;
+        }
+
+        public void setForeignKeys(Map<String, String> foreignKeys) {
+            this.foreignKeys = foreignKeys != null ? foreignKeys : new LinkedHashMap<>();
+        }
     }
 
     private static final Pattern CREATE_TABLE_HEADER_PATTERN = Pattern.compile(
@@ -62,6 +74,20 @@ public class DdlSqlParser {
 
     private static final Pattern PRIMARY_KEY_CONSTRAINT_PATTERN = Pattern.compile(
             "(?i)PRIMARY\\s+KEY\\s*\\(([^)]+)\\)"
+    );
+
+    /**
+     * 表级 FOREIGN KEY (`order_id`) REFERENCES `user_order` (`id`) 约束匹配
+     */
+    private static final Pattern TABLE_FOREIGN_KEY_PATTERN = Pattern.compile(
+            "(?i)FOREIGN\\s+KEY\\s*\\(\\s*[`\"\\[]?([a-zA-Z0-9_]+)[`\"\\]]?\\s*\\)\\s*REFERENCES\\s+(?:[`\"\\[]?\\w+[`\"\\]]?\\s*\\.\\s*)?[`\"\\[]?([a-zA-Z0-9_]+)[`\"\\]]?\\s*(?:\\(\\s*[`\"\\[]?([a-zA-Z0-9_]+)[`\"\\]]?\\s*\\))?"
+    );
+
+    /**
+     * 列内 REFERENCES `user_order` (`id`) 约束匹配
+     */
+    private static final Pattern INLINE_REFERENCES_PATTERN = Pattern.compile(
+            "(?i)REFERENCES\\s+(?:[`\"\\[]?\\w+[`\"\\]]?\\s*\\.\\s*)?[`\"\\[]?([a-zA-Z0-9_]+)[`\"\\]]?\\s*(?:\\(\\s*[`\"\\[]?([a-zA-Z0-9_]+)[`\"\\]]?\\s*\\))?"
     );
 
     /**
@@ -124,7 +150,9 @@ public class DdlSqlParser {
             ParsedTable parsedTable = new ParsedTable();
             parsedTable.setTableName(rawTableName);
             parsedTable.setTableComment(extractTableComment(tailOptions));
-            parsedTable.setColumns(parseColumnsFromBody(bodyContent));
+            Map<String, String> fkMap = new LinkedHashMap<>();
+            parsedTable.setColumns(parseColumnsFromBody(bodyContent, fkMap));
+            parsedTable.setForeignKeys(fkMap);
 
             result.put(rawTableName, parsedTable);
         }
@@ -145,7 +173,7 @@ public class DdlSqlParser {
             if (addBody.startsWith("(") && addBody.endsWith(")")) {
                 addBody = addBody.substring(1, addBody.length() - 1);
             }
-            List<Table> addedCols = parseColumnsFromBody(addBody);
+            List<Table> addedCols = parseColumnsFromBody(addBody, parsedTable.getForeignKeys());
             for (Table added : addedCols) {
                 mergeOrAddColumn(parsedTable.getColumns(), added);
             }
@@ -205,7 +233,7 @@ public class DdlSqlParser {
         return null;
     }
 
-    private static List<Table> parseColumnsFromBody(String bodyContent) {
+    private static List<Table> parseColumnsFromBody(String bodyContent, Map<String, String> foreignKeysOut) {
         List<Table> columns = new ArrayList<>();
         Set<String> primaryKeys = new HashSet<>();
 
@@ -222,6 +250,13 @@ public class DdlSqlParser {
                         primaryKeys.add(cleanPk.toLowerCase(Locale.ROOT));
                     }
                 }
+            }
+            Matcher fkMatcher = TABLE_FOREIGN_KEY_PATTERN.matcher(trimmed);
+            if (fkMatcher.find() && isConstraintLine(trimmed) && foreignKeysOut != null) {
+                String fkCol = fkMatcher.group(1).trim();
+                String refTable = fkMatcher.group(2).trim();
+                String refPk = StringUtils.defaultIfBlank(fkMatcher.group(3), "id").trim();
+                foreignKeysOut.put(fkCol, refTable + "." + refPk);
             }
         }
 
@@ -261,6 +296,13 @@ public class DdlSqlParser {
             boolean isPk = upperMod.contains("PRIMARY KEY") || primaryKeys.contains(rawColName.toLowerCase(Locale.ROOT));
             tableCol.setNullable(!isNotNull);
             tableCol.setPrimaryKey(isPk);
+
+            Matcher inlineRefMatcher = INLINE_REFERENCES_PATTERN.matcher(modifiers);
+            if (inlineRefMatcher.find() && foreignKeysOut != null) {
+                String refTable = inlineRefMatcher.group(1).trim();
+                String refPk = StringUtils.defaultIfBlank(inlineRefMatcher.group(2), "id").trim();
+                foreignKeysOut.put(rawColName, refTable + "." + refPk);
+            }
 
             Matcher commentMatcher = COLUMN_COMMENT_PATTERN.matcher(modifiers);
             if (commentMatcher.find()) {

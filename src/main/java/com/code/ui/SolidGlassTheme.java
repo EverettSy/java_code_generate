@@ -9,8 +9,10 @@ import javax.swing.*;
 import javax.swing.border.EmptyBorder;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
+import javax.swing.plaf.basic.BasicButtonUI;
 import javax.swing.plaf.basic.BasicSplitPaneDivider;
 import javax.swing.plaf.basic.BasicSplitPaneUI;
+import javax.swing.plaf.basic.BasicTabbedPaneUI;
 import javax.swing.text.*;
 import java.awt.*;
 import java.awt.event.FocusAdapter;
@@ -186,6 +188,62 @@ public final class SolidGlassTheme {
     }
 
     /**
+     * 选中页签只抬起一层中性灰底（与 hover/选中同一状态），不再整块填充品牌蓝
+     */
+    public static void styleTabs(JTabbedPane tabs) {
+        tabs.setUI(new BasicTabbedPaneUI() {
+            @Override
+            protected void installDefaults() {
+                super.installDefaults();
+                tabInsets = JBUI.insets(6, 12);
+                tabAreaInsets = JBUI.insets(2, 0, 4, 0);
+                contentBorderInsets = JBUI.insetsTop(6);
+                selectedTabPadInsets = JBUI.emptyInsets();
+            }
+
+            @Override
+            protected void paintTabBackground(Graphics g, int placement, int index, int x, int y, int w, int h, boolean selected) {
+                if (!selected) {
+                    return;
+                }
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(hoverBg());
+                g2.fillRoundRect(x, y, w, h, JBUI.scale(8), JBUI.scale(8));
+                g2.dispose();
+            }
+
+            @Override
+            protected void paintTabBorder(Graphics g, int placement, int index, int x, int y, int w, int h, boolean selected) {
+            }
+
+            @Override
+            protected void paintFocusIndicator(Graphics g, int placement, Rectangle[] rects, int index, Rectangle iconRect, Rectangle textRect, boolean selected) {
+                if (selected && tabPane.isFocusOwner()) {
+                    g.setColor(focusBorderColor());
+                    g.drawLine(textRect.x, textRect.y + textRect.height + 1, textRect.x + textRect.width, textRect.y + textRect.height + 1);
+                }
+            }
+
+            @Override
+            protected void paintText(Graphics g, int placement, Font font, FontMetrics metrics, int index, String title, Rectangle textRect, boolean selected) {
+                Graphics2D g2 = (Graphics2D) g;
+                g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                g2.setFont(font);
+                g2.setColor(selected ? textPrimary() : textSecondary());
+                g2.drawString(title, textRect.x, textRect.y + metrics.getAscent());
+            }
+
+            @Override
+            protected void paintContentBorder(Graphics g, int placement, int selectedIndex) {
+                int y = calculateTabAreaHeight(placement, runCount, maxTabHeight);
+                g.setColor(borderColor());
+                g.drawLine(0, y, tabPane.getWidth(), y);
+            }
+        });
+    }
+
+    /**
      * 创建消除亮白分隔条的定制 JSplitPane：
      * - 默认轨道使用 #343A46，中央抓手略亮
      * - 鼠标悬停或拥有焦点时切换为 #6AA8FF
@@ -204,6 +262,7 @@ public final class SolidGlassTheme {
                 return new CleanSplitPaneDivider(this);
             }
         });
+        splitPane.setBorder(null);
         return splitPane;
     }
 
@@ -304,6 +363,10 @@ public final class SolidGlassTheme {
                 g2.setColor(borderColor());
                 g2.setStroke(new BasicStroke(1f));
                 g2.draw(new RoundRectangle2D.Float(0.5f, 0.5f, w - 1f, h - 1f, r, r));
+                if (thickness == Thickness.THICK) {
+                    g2.setColor(isDark() ? new Color(255, 255, 255, 48) : new Color(255, 255, 255, 210));
+                    g2.drawLine(r, 2, w - r, 2);
+                }
             } finally {
                 g2.dispose();
             }
@@ -390,7 +453,7 @@ public final class SolidGlassTheme {
             Font font = UIUtil.getLabelFont().deriveFont(Font.PLAIN, JBUI.scaleFontSize(11.5f));
             FontMetrics fm = getFontMetrics(font);
             int textW = StringUtils.isNotBlank(statusText) ? fm.stringWidth(statusText) : 0;
-            return new Dimension(24 + textW + 10, 24);
+            return new Dimension(JBUI.scale(14) + textW + JBUI.scale(4), JBUI.scale(24));
         }
 
         @Override
@@ -400,48 +463,17 @@ public final class SolidGlassTheme {
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
                 g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
 
-                int w = getWidth();
                 int h = getHeight();
-
-                Color bg;
-                Color fg;
-                Color border;
-                switch (state) {
-                    case READY:
-                        bg = successBg();
-                        fg = successFg();
-                        border = new Color(fg.getRed(), fg.getGreen(), fg.getBlue(), 90);
-                        break;
-                    case WORKING:
-                        bg = selectedBg();
-                        fg = selectedFg();
-                        border = new Color(fg.getRed(), fg.getGreen(), fg.getBlue(), 90);
-                        break;
-                    case WARNING:
-                        bg = warningBg();
-                        fg = warningFg();
-                        border = new Color(fg.getRed(), fg.getGreen(), fg.getBlue(), 90);
-                        break;
-                    case ERROR:
-                        bg = errorBg();
-                        fg = errorFg();
-                        border = new Color(fg.getRed(), fg.getGreen(), fg.getBlue(), 90);
-                        break;
-                    case IDLE:
-                    default:
-                        bg = inputBg();
-                        fg = textSecondary();
-                        border = borderColor();
-                        break;
-                }
-
-                g2.setColor(bg);
-                g2.fillRoundRect(0, 1, w - 1, h - 2, 6, 6);
-                g2.setColor(border);
-                g2.drawRoundRect(0, 1, w - 2, h - 3, 6, 6);
+                Color fg = switch (state) {
+                    case READY -> successFg();
+                    case WORKING -> accentColor();
+                    case WARNING -> warningFg();
+                    case ERROR -> errorFg();
+                    default -> textMuted();
+                };
 
                 // 单一语义状态点（实心圆=已确认成功/错误，空心环=未验证/待命）
-                int dotX = 9;
+                int dotX = JBUI.scale(2);
                 int dotY = h / 2 - 3;
                 g2.setColor(fg);
                 if (state == GlyphState.IDLE) {
@@ -453,9 +485,9 @@ public final class SolidGlassTheme {
                 if (StringUtils.isNotBlank(statusText)) {
                     Font font = UIUtil.getLabelFont().deriveFont(Font.PLAIN, JBUI.scaleFontSize(11.5f));
                     g2.setFont(font);
-                    g2.setColor(fg);
+                    g2.setColor(state == GlyphState.ERROR ? fg : textSecondary());
                     FontMetrics fm = g2.getFontMetrics();
-                    g2.drawString(statusText, dotX + 11, (h - fm.getHeight()) / 2 + fm.getAscent());
+                    g2.drawString(statusText, dotX + JBUI.scale(11), (h - fm.getHeight()) / 2 + fm.getAscent());
                 }
             } finally {
                 g2.dispose();
@@ -482,7 +514,7 @@ public final class SolidGlassTheme {
             setFocusPainted(false);
             setBorderPainted(false);
             setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-            setBorder(new EmptyBorder(4, 11, 5, 11));
+            setBorder(JBUI.Borders.empty(4, 11, 5, 11));
             setFont(UIUtil.getLabelFont().deriveFont(emphasized ? Font.BOLD : Font.PLAIN, JBUI.scaleFontSize(11.5f)));
 
             addMouseListener(new MouseAdapter() {
@@ -511,6 +543,11 @@ public final class SolidGlassTheme {
                     repaint();
                 }
             });
+        }
+
+        @Override
+        public void updateUI() {
+            setUI(new BasicButtonUI());
         }
 
         @Override
@@ -562,6 +599,25 @@ public final class SolidGlassTheme {
             } finally {
                 g2.dispose();
             }
+        }
+    }
+
+    /** 无底无框的图标/文字按钮；绕开平台按钮 UI 的 72px 最小宽度与最小高度 */
+    public static class FlatButton extends JButton {
+        public FlatButton(String text, Icon icon) {
+            super(text, icon);
+            setContentAreaFilled(false);
+            setBorderPainted(false);
+            setFocusPainted(false);
+            setOpaque(false);
+            setBorder(JBUI.Borders.empty(4));
+            setForeground(textPrimary());
+            setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        }
+
+        @Override
+        public void updateUI() {
+            setUI(new BasicButtonUI());
         }
     }
 
